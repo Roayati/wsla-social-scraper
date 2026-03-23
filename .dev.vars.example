@@ -1,0 +1,2 @@
+# Copy this file to .dev.vars for local development with Wrangler.
+API_KEY=replace-with-a-secret-key
