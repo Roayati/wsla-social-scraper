@@ -1,4 +1,9 @@
-import type { SocialPost, SocialProvider } from '../types/social';
+import type {
+  InstagramProfileMeta,
+  InstagramProfileResponse,
+  SocialPost,
+  SocialProvider,
+} from '../types/social';
 import { badRequest, internalError } from '../utils/errors';
 
 const INSTAGRAM_APP_ID = '936619743392459';
@@ -22,11 +27,20 @@ const MOBILE_BROWSER_PROFILES = [
   },
 ];
 const RESPONSE_LOG_PREVIEW_LENGTH = 500;
+const INSTAGRAM_PROFILE_COUNT_PATTERNS = {
+  total_posts: /"edge_owner_to_timeline_media"\s*:\s*\{[^{}]*?"count"\s*:\s*(\d+)/,
+  followers: /"edge_followed_by"\s*:\s*\{[^{}]*?"count"\s*:\s*(\d+)/,
+  following: /"edge_follow"\s*:\s*\{[^{}]*?"count"\s*:\s*(\d+)/,
+} as const;
 
 interface InstagramCaptionEdge {
   node?: {
     text?: string;
   };
+}
+
+interface InstagramCountNode {
+  count?: number;
 }
 
 interface InstagramNode {
@@ -40,15 +54,20 @@ interface InstagramNode {
   };
 }
 
+interface InstagramUser {
+  edge_owner_to_timeline_media?: {
+    count?: number;
+    edges?: Array<{
+      node?: InstagramNode;
+    }>;
+  };
+  edge_followed_by?: InstagramCountNode;
+  edge_follow?: InstagramCountNode;
+}
+
 interface InstagramApiResponse {
   data?: {
-    user?: {
-      edge_owner_to_timeline_media?: {
-        edges?: Array<{
-          node?: InstagramNode;
-        }>;
-      };
-    } | null;
+    user?: InstagramUser | null;
   };
   status?: string;
 }
@@ -151,6 +170,56 @@ function buildUpstreamError(status: number, bodyText: string, contentType: strin
   return internalError('Scraper request failed', `Instagram returned HTTP ${status}.${previewSuffix}`);
 }
 
+function createEmptyProfileMeta(): InstagramProfileMeta {
+  return {
+    total_posts: null,
+    followers: null,
+    following: null,
+  };
+}
+
+function normalizeCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function extractCountFromPattern(bodyText: string, pattern: RegExp): number | null {
+  const match = pattern.exec(bodyText);
+
+  if (!match) {
+    return null;
+  }
+
+  const count = Number.parseInt(match[1] ?? '', 10);
+
+  return Number.isFinite(count) ? count : null;
+}
+
+function extractProfileMetaFromText(bodyText: string): InstagramProfileMeta {
+  return {
+    total_posts: extractCountFromPattern(bodyText, INSTAGRAM_PROFILE_COUNT_PATTERNS.total_posts),
+    followers: extractCountFromPattern(bodyText, INSTAGRAM_PROFILE_COUNT_PATTERNS.followers),
+    following: extractCountFromPattern(bodyText, INSTAGRAM_PROFILE_COUNT_PATTERNS.following),
+  };
+}
+
+function mergeProfileMeta(primary: InstagramProfileMeta, fallback: InstagramProfileMeta): InstagramProfileMeta {
+  return {
+    total_posts: primary.total_posts ?? fallback.total_posts,
+    followers: primary.followers ?? fallback.followers,
+    following: primary.following ?? fallback.following,
+  };
+}
+
+function extractProfileMeta(user: InstagramUser | null | undefined, bodyText: string): InstagramProfileMeta {
+  const structuredMeta: InstagramProfileMeta = {
+    total_posts: normalizeCount(user?.edge_owner_to_timeline_media?.count),
+    followers: normalizeCount(user?.edge_followed_by?.count),
+    following: normalizeCount(user?.edge_follow?.count),
+  };
+
+  return mergeProfileMeta(structuredMeta, extractProfileMetaFromText(bodyText));
+}
+
 async function fetchInstagramProfile(username: string): Promise<InstagramUpstreamResponse> {
   const url = new URL(INSTAGRAM_API_URL);
   url.searchParams.set('username', username);
@@ -184,12 +253,9 @@ async function fetchInstagramProfile(username: string): Promise<InstagramUpstrea
   };
 }
 
-export async function getInstagramPosts(username: string, limit = 5): Promise<SocialPost[]> {
-  const upstream = await fetchInstagramProfile(username);
-  let payload: InstagramApiResponse;
-
+function parseInstagramPayload(upstream: InstagramUpstreamResponse): InstagramApiResponse {
   try {
-    payload = JSON.parse(upstream.bodyText) as InstagramApiResponse;
+    return JSON.parse(upstream.bodyText) as InstagramApiResponse;
   } catch (error) {
     throw internalError(
       'Scraper request failed',
@@ -198,9 +264,15 @@ export async function getInstagramPosts(username: string, limit = 5): Promise<So
         : 'Failed to parse Instagram JSON response.'
     );
   }
-  const edges = payload.data?.user?.edge_owner_to_timeline_media?.edges;
+}
 
-  if (payload.data?.user === null) {
+export async function getInstagramProfile(username: string, limit = 5): Promise<InstagramProfileResponse> {
+  const upstream = await fetchInstagramProfile(username);
+  const payload = parseInstagramPayload(upstream);
+  const user = payload.data?.user;
+  const edges = user?.edge_owner_to_timeline_media?.edges;
+
+  if (user === null) {
     throw badRequest('Instagram profile not found', `No public Instagram profile was found for '${username}'.`);
   }
 
@@ -211,14 +283,25 @@ export async function getInstagramPosts(username: string, limit = 5): Promise<So
     );
   }
 
-  return edges
-    .slice(0, limit)
-    .map((edge) => edge.node)
-    .filter((node): node is InstagramNode => Boolean(node))
-    .map(mapNodeToPost);
+  return {
+    profile: extractProfileMeta(user, upstream.bodyText),
+    posts: edges
+      .slice(0, limit)
+      .map((edge) => edge.node)
+      .filter((node): node is InstagramNode => Boolean(node))
+      .map(mapNodeToPost),
+  };
+}
+
+export async function getInstagramPosts(username: string, limit = 5): Promise<SocialPost[]> {
+  const result = await getInstagramProfile(username, limit);
+
+  return result.posts;
 }
 
 export const instagramProvider: SocialProvider = {
   platform: 'instagram',
   getPosts: getInstagramPosts,
 };
+
+export { createEmptyProfileMeta };

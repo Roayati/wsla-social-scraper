@@ -1,5 +1,5 @@
-import { getInstagramPosts } from './providers/instagram';
-import type { SocialFeedResponse } from './types/social';
+import { createEmptyProfileMeta, getInstagramProfile } from './providers/instagram';
+import type { InstagramProfileResponse, SocialFeedResponse } from './types/social';
 import { AppError, notFound, toAppError, unauthorized } from './utils/errors';
 import { errorResponse, jsonResponse, optionsResponse, withCacheHeaders } from './utils/json';
 import { normalizeLimit, normalizeUsername } from './utils/validation';
@@ -16,12 +16,13 @@ function isAuthorized(request: Request, env: Env): boolean {
   return request.headers.get('x-api-key') === env.API_KEY;
 }
 
-function buildInstagramResponse(username: string, posts: Awaited<ReturnType<typeof getInstagramPosts>>): SocialFeedResponse {
+function buildInstagramResponse(username: string, result: InstagramProfileResponse): SocialFeedResponse {
   return {
     platform: 'instagram',
     username,
-    count: posts.length,
-    posts,
+    count: result.posts.length,
+    profile: result.profile ?? createEmptyProfileMeta(),
+    posts: result.posts,
   };
 }
 
@@ -44,8 +45,8 @@ async function handleInstagram(request: Request, ctx: ExecutionContext): Promise
   const url = new URL(request.url);
   const username = normalizeUsername(url.searchParams.get('username'));
   const limit = normalizeLimit(url.searchParams.get('limit'));
-  const posts = await getInstagramPosts(username, limit);
-  const response = withCacheHeaders(jsonResponse(buildInstagramResponse(username, posts)));
+  const result = await getInstagramProfile(username, limit);
+  const response = withCacheHeaders(jsonResponse(buildInstagramResponse(username, result)));
 
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
 

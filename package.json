@@ -1,8 +1,8 @@
 {
   "name": "wsla-social-scraper",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": true,
-  "description": "Cloudflare Worker API for fetching normalized social posts for Wsla with Instagram upstream diagnostics and a stable API contract.",
+  "description": "Cloudflare Worker API for fetching normalized Instagram posts plus profile metadata for Wsla with upstream diagnostics and a stable API contract.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",

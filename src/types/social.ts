@@ -9,10 +9,22 @@ export interface SocialPost {
   timestamp: number | null;
 }
 
+export interface InstagramProfileMeta {
+  total_posts: number | null;
+  followers: number | null;
+  following: number | null;
+}
+
 export interface SocialFeedResponse {
   platform: SupportedPlatform;
   username: string;
   count: number;
+  profile: InstagramProfileMeta;
+  posts: SocialPost[];
+}
+
+export interface InstagramProfileResponse {
+  profile: InstagramProfileMeta;
   posts: SocialPost[];
 }
 
