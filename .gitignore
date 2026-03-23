@@ -143,3 +143,6 @@ coverage/
 coverage/
 .github/
 package-lock.json
+
+.dev.vars
+.wrangler/
