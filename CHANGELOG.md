@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0 - 2026-03-23
+
+- Added Instagram `profile.total_posts`, `profile.followers`, and `profile.following` to the `/instagram` API response while preserving the existing posts payload.
+- Extended the Instagram provider to read profile counts from structured profile data and fall back to regex extraction when those counts are missing.
+- Updated the Worker handler, shared types, package metadata, and README examples to document the richer Bubble-friendly response contract.
+
 ## 2.0.1 - 2026-03-23
 
 - Logged the Instagram upstream HTTP status and a 500-character response preview for faster incident triage.

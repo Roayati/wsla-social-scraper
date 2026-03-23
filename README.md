@@ -23,7 +23,7 @@ Example response:
 ```
 
 ### `GET /instagram?username=benefit.bh&limit=5`
-Returns a stable, Bubble-friendly JSON payload of recent posts from a public Instagram profile.
+Returns a stable, Bubble-friendly JSON payload of recent posts from a public Instagram profile plus profile-level metadata extracted from the profile response.
 
 Example response:
 
@@ -32,6 +32,11 @@ Example response:
   "platform": "instagram",
   "username": "benefit.bh",
   "count": 5,
+  "profile": {
+    "total_posts": 123,
+    "followers": 45678,
+    "following": 321
+  },
   "posts": [
     {
       "id": null,
@@ -47,12 +52,17 @@ Example response:
 
 Field names are intentionally stable and should be treated as the API contract:
 
+- `profile.total_posts`
+- `profile.followers`
+- `profile.following`
 - `id`
 - `shortcode`
 - `caption`
 - `thumbnail_url`
 - `post_url`
 - `timestamp`
+
+Profile metadata values are always numeric or `null`, and the `profile` object is always present even when Instagram omits one or more counts.
 
 ## Architecture
 
@@ -76,7 +86,7 @@ src/
 - **Fetch-based scraping:** Worker-compatible requests to public Instagram endpoints
 - **Upstream diagnostics:** logs upstream status codes plus a 500-character response preview for Instagram fetches
 - **Provider-based structure:** easy to extend with TikTok later
-- **Stable JSON contract:** suitable for Bubble.io and other low-code consumers
+- **Stable JSON contract:** suitable for Bubble.io and other low-code consumers, including profile metadata
 - **Operational basics included:** validation, auth, CORS, and cache support
 
 ## Requirements
@@ -163,6 +173,31 @@ Instagram request with auth:
 curl -H "x-api-key: YOUR_KEY" "http://127.0.0.1:8787/instagram?username=benefit.bh&limit=5"
 ```
 
+Example Instagram response with profile metadata:
+
+```json
+{
+  "platform": "instagram",
+  "username": "arabbankbahrain",
+  "count": 5,
+  "profile": {
+    "total_posts": 250,
+    "followers": 120000,
+    "following": 45
+  },
+  "posts": [
+    {
+      "id": "1234567890",
+      "shortcode": "ABC123",
+      "caption": "Post caption",
+      "thumbnail_url": "https://...",
+      "post_url": "https://www.instagram.com/p/ABC123/",
+      "timestamp": 1712345678
+    }
+  ]
+}
+```
+
 Instagram request showing username normalization:
 
 ```bash
@@ -184,6 +219,7 @@ Recommended Bubble patterns:
 
 - Keep `username` dynamic from your Bubble app.
 - Keep `limit` in the `1..12` range.
+- Map `profile.total_posts`, `profile.followers`, and `profile.following` as numbers in Bubble.
 - Store `x-api-key` in a private server-side setting whenever possible.
 - Prefer Bubble workflows or backend calls rather than exposing secrets in the browser.
 
@@ -241,6 +277,7 @@ The Worker returns the following CORS headers:
 For `GET /instagram`:
 
 - Cloudflare `caches.default` is used
+- cached responses include both the `profile` metadata object and `posts` array
 - cache key is based on the full request URL
 - only successful responses are cached
 - `Cache-Control` is set to `public, max-age=300`
