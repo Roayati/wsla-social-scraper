@@ -1,14 +1,14 @@
 import { AppError } from './errors';
 
+const DEFAULT_CACHE_CONTROL = 'public, max-age=300';
+const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'content-type, x-api-key',
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, OPTIONS',
+  'access-control-allow-headers': 'content-type, x-api-key',
 };
 
-function buildHeaders(init?: HeadersInit): Headers {
-  const headers = new Headers(init);
-
+function applyCorsHeaders(headers: Headers): Headers {
   Object.entries(CORS_HEADERS).forEach(([key, value]) => {
     headers.set(key, value);
   });
@@ -16,13 +16,17 @@ function buildHeaders(init?: HeadersInit): Headers {
   return headers;
 }
 
-export function jsonResponse(data: unknown, status = 200, init?: HeadersInit): Response {
-  const headers = buildHeaders(init);
-  headers.set('content-type', 'application/json; charset=utf-8');
+function buildJsonHeaders(init?: HeadersInit, cacheControl = DEFAULT_CACHE_CONTROL): Headers {
+  const headers = applyCorsHeaders(new Headers(init));
+  headers.set('content-type', JSON_CONTENT_TYPE);
+  headers.set('cache-control', cacheControl);
+  return headers;
+}
 
+export function json(data: unknown, status = 200, init?: HeadersInit): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers,
+    headers: buildJsonHeaders(init),
   });
 }
 
@@ -35,22 +39,20 @@ export function errorResponse(error: AppError): Response {
     payload.details = error.details;
   }
 
-  return jsonResponse(payload, error.status);
+  return json(payload, error.status);
 }
 
 export function optionsResponse(): Response {
-  const headers = buildHeaders();
+  const headers = applyCorsHeaders(new Headers());
+  headers.set('cache-control', DEFAULT_CACHE_CONTROL);
   headers.set('content-length', '0');
   return new Response(null, { status: 204, headers });
 }
 
-export function withCacheHeaders(response: Response, cacheControl = 'public, max-age=300'): Response {
-  const headers = buildHeaders(response.headers);
-  headers.set('Cache-Control', cacheControl);
-
+export function withCacheHeaders(response: Response, cacheControl = DEFAULT_CACHE_CONTROL): Response {
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers,
+    headers: buildJsonHeaders(response.headers, cacheControl),
   });
 }

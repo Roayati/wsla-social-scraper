@@ -88,6 +88,7 @@ src/
 - **Provider-based structure:** easy to extend with TikTok later
 - **Stable JSON contract:** suitable for Bubble.io and other low-code consumers, including profile metadata
 - **Operational basics included:** validation, auth, CORS, and cache support
+- **Bubble-hardened responses:** every JSON response, including cache hits and errors, is rebuilt with explicit JSON, cache, and CORS headers
 
 ## Requirements
 
@@ -218,6 +219,8 @@ A simple Bubble.io setup can look like this:
 Recommended Bubble patterns:
 
 - Keep `username` dynamic from your Bubble app.
+- Expect every JSON response path (`/instagram`, `/health`, `401`, `404`, and scraper errors) to include the same explicit headers: `content-type: application/json; charset=utf-8`, `cache-control: public, max-age=300`, `access-control-allow-origin: *`, `access-control-allow-methods: GET, OPTIONS`, and `access-control-allow-headers: content-type, x-api-key`.
+- Cached `/instagram` responses are reconstructed before they are returned so Bubble always receives a clean JSON content type and consistent CORS/cache headers.
 - Keep `limit` in the `1..12` range.
 - Map `profile.total_posts`, `profile.followers`, and `profile.following` as numbers in Bubble.
 - Store `x-api-key` in a private server-side setting whenever possible.
@@ -314,3 +317,26 @@ If you add a new platform later:
 ## License
 
 MIT.
+
+## Response header behavior
+
+All JSON responses are now emitted through one shared helper so Bubble server-side requests see the same header set for:
+
+- successful `/instagram` responses
+- cached `/instagram` responses
+- `/health` responses
+- `401` authentication failures
+- `404` route misses
+- scraper and validation errors
+
+The Worker guarantees these response headers on every JSON response:
+
+```http
+content-type: application/json; charset=utf-8
+cache-control: public, max-age=300
+access-control-allow-origin: *
+access-control-allow-methods: GET, OPTIONS
+access-control-allow-headers: content-type, x-api-key
+```
+
+`OPTIONS` responses continue to return `204 No Content`, but they also include the same CORS headers plus `cache-control: public, max-age=300`.
