@@ -74,6 +74,7 @@ src/
 
 - **Cloudflare Worker first:** no Node-only HTTP server runtime
 - **Fetch-based scraping:** Worker-compatible requests to public Instagram endpoints
+- **Upstream diagnostics:** logs upstream status codes plus a 500-character response preview for Instagram fetches
 - **Provider-based structure:** easy to extend with TikTok later
 - **Stable JSON contract:** suitable for Bubble.io and other low-code consumers
 - **Operational basics included:** validation, auth, CORS, and cache support
@@ -223,6 +224,8 @@ Status codes used:
 - `404` unknown route
 - `500` scraper or runtime failure
 
+For Instagram scraper failures, the JSON error shape stays the same while `details` now includes richer upstream context for common anti-bot or throttling cases such as upstream `403`, upstream `429`, and unexpected HTML responses.
+
 ## CORS
 
 The Worker returns the following CORS headers:
@@ -247,7 +250,7 @@ This reduces repeated upstream scraping and helps protect the Worker from unnece
 ## Important limitations
 
 - **Public profiles only:** private Instagram accounts are not supported.
-- **Scraping can break:** Instagram may change response formats or anti-bot behavior at any time.
+- **Scraping can break:** Instagram may change response formats or anti-bot behavior at any time. The Worker now logs the upstream status code and the first 500 characters of the upstream body to make these failures easier to diagnose.
 - **Caching is recommended:** repeated real-time scraping is inherently fragile.
 - **No browser automation:** this Worker intentionally avoids Puppeteer, Playwright, or similar tooling.
 - **Upstream dependency:** response quality depends on public Instagram endpoint availability.
