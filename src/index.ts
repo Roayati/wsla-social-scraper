@@ -1,7 +1,7 @@
 import { createEmptyProfileMeta, getInstagramProfile } from './providers/instagram';
 import type { InstagramProfileResponse, SocialFeedResponse } from './types/social';
 import { AppError, notFound, toAppError, unauthorized } from './utils/errors';
-import { errorResponse, jsonResponse, optionsResponse, withCacheHeaders } from './utils/json';
+import { errorResponse, json, optionsResponse, withCacheHeaders } from './utils/json';
 import { normalizeLimit, normalizeUsername } from './utils/validation';
 
 export interface Env {
@@ -27,7 +27,7 @@ function buildInstagramResponse(username: string, result: InstagramProfileRespon
 }
 
 async function handleHealth(): Promise<Response> {
-  return jsonResponse({
+  return json({
     ok: true,
     service: 'wsla-social-scraper',
   });
@@ -46,7 +46,7 @@ async function handleInstagram(request: Request, ctx: ExecutionContext): Promise
   const username = normalizeUsername(url.searchParams.get('username'));
   const limit = normalizeLimit(url.searchParams.get('limit'));
   const result = await getInstagramProfile(username, limit);
-  const response = withCacheHeaders(jsonResponse(buildInstagramResponse(username, result)));
+  const response = withCacheHeaders(json(buildInstagramResponse(username, result)));
 
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
 

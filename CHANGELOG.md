@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1 - 2026-03-23
+
+- Hardened the shared Worker response helper so every JSON response path now returns explicit Bubble-friendly JSON, cache-control, and CORS headers.
+- Rebuilt cached `/instagram` responses before returning them so cache hits preserve the same headers as fresh responses.
+- Updated the README and package metadata to document the stricter response-header contract for Bubble plugin and server-side requests.
+
 ## 2.1.0 - 2026-03-23
 
 - Added Instagram `profile.total_posts`, `profile.followers`, and `profile.following` to the `/instagram` API response while preserving the existing posts payload.
