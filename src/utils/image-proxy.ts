@@ -2,6 +2,8 @@ import { json } from './json';
 
 const PROXY_IMAGE_PATH_PREFIX = '/image/';
 const LONG_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const FALLBACK_IMAGE_URL =
+  'https://s3.amazonaws.com/appforest_uf/f1637596911843x861021239461689300/default_profile_picture.png';
 const ALLOWED_INSTAGRAM_IMAGE_HOST_SUFFIXES = ['.cdninstagram.com'];
 
 function isAllowedInstagramImageHost(hostname: string): boolean {
@@ -65,6 +67,26 @@ function buildImageHeaders(upstreamHeaders: Headers): Headers {
   return headers;
 }
 
+async function fetchImageWithFallback(upstreamImageUrl: URL): Promise<Response> {
+  try {
+    const upstreamResponse = await fetch(upstreamImageUrl.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+    });
+
+    if (upstreamResponse.ok && upstreamResponse.status < 400) {
+      return upstreamResponse;
+    }
+  } catch {
+    // Fall through and return the fallback image.
+  }
+
+  return fetch(FALLBACK_IMAGE_URL, {
+    method: 'GET',
+    redirect: 'follow',
+  });
+}
+
 export function buildProxiedImageUrl(request: Request, originalUrl: string): string {
   const requestUrl = new URL(request.url);
   const encodedOriginalUrl = encodeURIComponent(originalUrl);
@@ -94,16 +116,13 @@ export async function proxyInstagramImage(request: Request): Promise<Response> {
     return json({ error: 'Invalid image proxy URL', details }, status);
   }
 
-  const upstreamResponse = await fetch(upstreamImageUrl.toString(), {
-    method: 'GET',
-    redirect: 'follow',
-  });
+  const upstreamResponse = await fetchImageWithFallback(upstreamImageUrl);
 
-  if (!upstreamResponse.ok) {
+  if (!upstreamResponse.ok || upstreamResponse.status >= 400) {
     return json(
       {
         error: 'Failed to fetch Instagram image',
-        details: `Upstream image request returned HTTP ${upstreamResponse.status}.`,
+        details: `Fallback image request returned HTTP ${upstreamResponse.status}.`,
       },
       502
     );
