@@ -24,6 +24,7 @@ Example response:
 
 ### `GET /instagram?username=benefit.bh&limit=5`
 Returns a stable, Bubble-friendly JSON payload of recent posts from a public Instagram profile plus profile-level metadata extracted from the profile response.
+The response contract is unchanged, but each `thumbnail_url` is now automatically rewritten to a Worker-proxied image URL (`/image/<encoded-url>`), which avoids Instagram CDN hotlink/display issues in Bubble.
 
 Example response:
 
@@ -42,13 +43,26 @@ Example response:
       "id": null,
       "shortcode": "ABC123",
       "caption": "Post caption",
-      "thumbnail_url": "https://...",
+      "thumbnail_url": "https://YOUR_WORKER_DOMAIN/image/https%3A%2F%2Fscontent-....cdninstagram.com%2F....jpg%3F...",
       "post_url": "https://www.instagram.com/p/ABC123/",
       "timestamp": 1712345678
     }
   ]
 }
 ```
+
+### `GET /image/<encoded-instagram-image-url>`
+Returns the binary image body for a URL-encoded Instagram CDN image URL.
+
+Behavior:
+
+- Validates and decodes the original URL
+- Allows only `http/https` URLs from Instagram CDN hosts
+- Returns image bytes directly with upstream `content-type` when available
+- Adds `access-control-allow-origin: *`
+- Adds `cache-control: public, max-age=31536000, immutable`
+- Uses `caches.default` for successful Worker-layer image caching
+- Does **not** require `x-api-key` so Bubble image elements can load directly
 
 Field names are intentionally stable and should be treated as the API contract:
 
@@ -58,7 +72,7 @@ Field names are intentionally stable and should be treated as the API contract:
 - `id`
 - `shortcode`
 - `caption`
-- `thumbnail_url`
+- `thumbnail_url` (now Worker-proxied automatically, same field name)
 - `post_url`
 - `timestamp`
 
@@ -76,6 +90,7 @@ src/
     social.ts
   utils/
     errors.ts
+    image-proxy.ts
     json.ts
     validation.ts
 ```
@@ -87,6 +102,7 @@ src/
 - **Upstream diagnostics:** logs upstream status codes plus a 500-character response preview for Instagram fetches
 - **Provider-based structure:** easy to extend with TikTok later
 - **Stable JSON contract:** suitable for Bubble.io and other low-code consumers, including profile metadata
+- **Bubble-safe thumbnails:** `thumbnail_url` keeps the same field name while serving from the Worker image proxy
 - **Operational basics included:** validation, auth, CORS, and cache support
 - **Bubble-hardened responses:** every JSON response, including cache hits and errors, is rebuilt with explicit JSON, cache, and CORS headers
 
@@ -191,7 +207,7 @@ Example Instagram response with profile metadata:
       "id": "1234567890",
       "shortcode": "ABC123",
       "caption": "Post caption",
-      "thumbnail_url": "https://...",
+      "thumbnail_url": "https://YOUR_WORKER_DOMAIN/image/https%3A%2F%2Fscontent-....cdninstagram.com%2F....jpg%3F...",
       "post_url": "https://www.instagram.com/p/ABC123/",
       "timestamp": 1712345678
     }
@@ -223,6 +239,7 @@ Recommended Bubble patterns:
 - Cached `/instagram` responses are reconstructed before they are returned so Bubble always receives a clean JSON content type and consistent CORS/cache headers.
 - Keep `limit` in the `1..12` range.
 - Map `profile.total_posts`, `profile.followers`, and `profile.following` as numbers in Bubble.
+- Use `thumbnail_url` directly in Bubble image elements; it now points to the Worker proxy and requires no extra Bubble workflow field mapping.
 - Store `x-api-key` in a private server-side setting whenever possible.
 - Prefer Bubble workflows or backend calls rather than exposing secrets in the browser.
 

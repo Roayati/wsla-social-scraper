@@ -1,6 +1,7 @@
 import { createEmptyProfileMeta, getInstagramProfile } from './providers/instagram';
 import type { InstagramProfileResponse, SocialFeedResponse } from './types/social';
 import { AppError, notFound, toAppError, unauthorized } from './utils/errors';
+import { buildProxiedImageUrl, proxyInstagramImage } from './utils/image-proxy';
 import { errorResponse, json, optionsResponse, withCacheHeaders } from './utils/json';
 import { normalizeLimit, normalizeUsername } from './utils/validation';
 
@@ -16,13 +17,20 @@ function isAuthorized(request: Request, env: Env): boolean {
   return request.headers.get('x-api-key') === env.API_KEY;
 }
 
-function buildInstagramResponse(username: string, result: InstagramProfileResponse): SocialFeedResponse {
+function buildInstagramResponse(
+  request: Request,
+  username: string,
+  result: InstagramProfileResponse
+): SocialFeedResponse {
   return {
     platform: 'instagram',
     username,
     count: result.posts.length,
     profile: result.profile ?? createEmptyProfileMeta(),
-    posts: result.posts,
+    posts: result.posts.map((post) => ({
+      ...post,
+      thumbnail_url: post.thumbnail_url ? buildProxiedImageUrl(request, post.thumbnail_url) : null,
+    })),
   };
 }
 
@@ -46,7 +54,7 @@ async function handleInstagram(request: Request, ctx: ExecutionContext): Promise
   const username = normalizeUsername(url.searchParams.get('username'));
   const limit = normalizeLimit(url.searchParams.get('limit'));
   const result = await getInstagramProfile(username, limit);
-  const response = withCacheHeaders(json(buildInstagramResponse(username, result)));
+  const response = withCacheHeaders(json(buildInstagramResponse(request, username, result)));
 
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
 
@@ -58,15 +66,19 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
     return optionsResponse();
   }
 
+  const url = new URL(request.url);
+
   if (request.method !== 'GET') {
-    throw notFound('Route not found', `No handler exists for ${request.method} ${new URL(request.url).pathname}.`);
+    throw notFound('Route not found', `No handler exists for ${request.method} ${url.pathname}.`);
+  }
+
+  if (url.pathname === '/image' || url.pathname.startsWith('/image/')) {
+    return proxyInstagramImage(request);
   }
 
   if (!isAuthorized(request, env)) {
     throw unauthorized('Invalid API key', 'Provide a valid x-api-key header.');
   }
-
-  const url = new URL(request.url);
 
   if (url.pathname === '/health') {
     return handleHealth();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0 - 2026-03-26
+
+- Added a new public `GET /image/<encoded>` endpoint that validates Instagram CDN URLs, fetches and returns binary image bodies, applies CORS plus long-lived immutable cache headers, and caches successful image responses in `caches.default`.
+- Updated `/instagram` post mapping so `thumbnail_url` keeps the same field name but now returns a Worker-proxied image URL instead of the raw Instagram CDN URL.
+- Added reusable image-proxy helpers to build proxied thumbnail URLs from the incoming Worker origin and safely proxy/validate encoded Instagram image URLs without creating an open proxy.
+- Updated README and package metadata to document automatic thumbnail proxying for Bubble hotlink/display reliability and Worker-layer image caching behavior.
+
 ## 2.1.1 - 2026-03-23
 
 - Hardened the shared Worker response helper so every JSON response path now returns explicit Bubble-friendly JSON, cache-control, and CORS headers.

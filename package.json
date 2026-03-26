@@ -1,8 +1,8 @@
 {
   "name": "wsla-social-scraper",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
-  "description": "Cloudflare Worker API for fetching normalized Instagram posts plus profile metadata for Wsla with hardened Bubble-friendly JSON and cache headers.",
+  "description": "Cloudflare Worker API for normalized Instagram posts with Bubble-safe JSON headers and Worker-proxied thumbnail URLs to avoid hotlink issues.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
@@ -17,7 +17,8 @@
     "wsla",
     "social-media",
     "typescript",
-    "bubble"
+    "bubble",
+    "image-proxy"
   ],
   "author": "aduptive",
   "license": "MIT",
