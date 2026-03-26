@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1 - 2026-03-26
+
+- Updated the `/image/<encoded>` proxy path to use a one-year immutable browser cache policy (`cache-control: public, max-age=31536000, immutable`) for faster repeat thumbnail loads.
+- Added an image fetch fallback path so upstream Instagram image failures now return a default profile image instead of a JSON error response.
+- Updated README and package metadata to document the new fallback behavior and long-lived image cache strategy.
+
 ## 2.2.0 - 2026-03-26
 
 - Added a new public `GET /image/<encoded>` endpoint that validates Instagram CDN URLs, fetches and returns binary image bodies, applies CORS plus long-lived immutable cache headers, and caches successful image responses in `caches.default`.

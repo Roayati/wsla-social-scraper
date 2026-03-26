@@ -62,6 +62,7 @@ Behavior:
 - Adds `access-control-allow-origin: *`
 - Adds `cache-control: public, max-age=31536000, immutable`
 - Uses `caches.default` for successful Worker-layer image caching
+- Falls back to a default profile image when Instagram image fetch fails (upstream non-2xx/4xx/5xx or fetch error)
 - Does **not** require `x-api-key` so Bubble image elements can load directly
 
 Field names are intentionally stable and should be treated as the API contract:
