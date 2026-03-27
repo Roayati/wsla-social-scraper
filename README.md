@@ -54,15 +54,38 @@ Example response:
 ### `GET /image/<encoded-instagram-image-url>`
 Returns the binary image body for a URL-encoded Instagram CDN image URL.
 
+Optional query params:
+
+- `w` = width (1..2000)
+- `h` = height (1..2000)
+- `q` = quality (40..95, default `82` when transform is used)
+- `fit` = `contain | cover | scale-down | crop | pad`
+- `format` = `auto | webp | avif | jpeg | png`
+
+Examples:
+
+- `/image/<encoded>?w=300`
+- `/image/<encoded>?w=300&h=300&fit=cover`
+- `/image/<encoded>?w=600&q=80&format=webp`
+- `/image/<encoded>?w=600&format=auto`
+
 Behavior:
 
 - Validates and decodes the original URL
 - Allows only `http/https` URLs from Instagram CDN hosts
-- Returns image bytes directly with upstream `content-type` when available
+- Keeps backward compatibility when no query params are supplied (existing Bubble usage keeps working)
+- Uses Cloudflare Worker image transformation options (`fetch(..., { cf: { image: ... } })`) when available
+- If `format=auto` (or omitted), negotiates output by `Accept` header:
+  - prefers `image/avif` when supported
+  - otherwise uses `image/webp` when supported
+  - otherwise falls back to `image/jpeg`
+- Uses `image/webp`, `image/avif`, `image/jpeg`, or `image/png` content-type based on selected output format
+- Preserves aspect ratio unless both `w` and `h` are supplied
+- Ignores invalid transform values safely and clamps numeric values to safe ranges
 - Adds `access-control-allow-origin: *`
 - Adds `cache-control: public, max-age=31536000, immutable`
-- Uses `caches.default` for successful Worker-layer image caching
-- Falls back to a default profile image when Instagram image fetch fails (upstream non-2xx/4xx/5xx or fetch error)
+- Uses `caches.default` for successful Worker-layer image caching, with cache keys that include transform settings and resolved output format
+- Falls back to a default profile image when Instagram image fetch/transformation fails (and applies the same transform settings to fallback where practical)
 - Does **not** require `x-api-key` so Bubble image elements can load directly
 
 Field names are intentionally stable and should be treated as the API contract:
@@ -305,6 +328,13 @@ For `GET /instagram`:
 
 This reduces repeated upstream scraping and helps protect the Worker from unnecessary load.
 
+For `GET /image/<encoded>`:
+
+- Cloudflare `caches.default` is used for successful image responses
+- cache key includes the encoded source URL plus normalized transform settings (`w`, `h`, `q`, `fit`, requested `format`) and resolved negotiated format
+- `Cache-Control` is set to `public, max-age=31536000, immutable`
+- `Vary: accept` is set for format negotiation safety
+
 ## Important limitations
 
 - **Public profiles only:** private Instagram accounts are not supported.
@@ -312,6 +342,7 @@ This reduces repeated upstream scraping and helps protect the Worker from unnece
 - **Caching is recommended:** repeated real-time scraping is inherently fragile.
 - **No browser automation:** this Worker intentionally avoids Puppeteer, Playwright, or similar tooling.
 - **Upstream dependency:** response quality depends on public Instagram endpoint availability.
+- **Cloudflare feature requirement:** remote-image resizing via Worker `cf.image` options requires the relevant Cloudflare image transformation capability to be enabled on your zone/account. If unavailable, the proxy falls back to raw fetches to preserve functionality.
 
 ## Migration notes from the original repository
 

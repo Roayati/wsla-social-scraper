@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.0 - 2026-03-26
+
+- Upgraded `GET /image/<encoded>` to support optional transformation query params: `w`, `h`, `q`, `fit`, and `format`.
+- Added automatic output format negotiation (`avif`/`webp`/`jpeg`) based on the request `Accept` header when `format=auto` or `format` is omitted.
+- Refactored image proxying to use Cloudflare Worker image transformations (`fetch(..., { cf: { image: ... } })`) with safe fallbacks to raw upstream fetches if transformation fails or is unavailable.
+- Kept backward compatibility for existing Bubble usage: `/instagram` JSON field names and `thumbnail_url` contract remain unchanged.
+- Added validation/clamping for transform params (`w`/`h` max 2000, `q` clamped to 40..95, fit/format allowlists) and cache-key normalization to include transform settings.
+- Extended fallback-image behavior so transform settings are also applied to the fallback image when possible.
+- Updated README and package metadata to document transform support, auto format negotiation, caching behavior, and Cloudflare requirements/caveats.
+
 ## 2.2.1 - 2026-03-26
 
 - Updated the `/image/<encoded>` proxy path to use a one-year immutable browser cache policy (`cache-control: public, max-age=31536000, immutable`) for faster repeat thumbnail loads.
