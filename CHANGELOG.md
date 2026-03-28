@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.1 - 2026-03-28
+
+- Fixed TikTok post extraction when profile stats are present but post arrays are empty by adding layered candidate discovery across `__UNIVERSAL_DATA_FOR_REHYDRATION__`, `SIGI_STATE`, and `__NEXT_DATA__`.
+- Added deep recursive TikTok video candidate scanning to support `ItemModule` maps, `itemList` ID joins, and embedded arrays of video-like objects.
+- Added a stronger TikTok post normalizer for `id`, `shortcode`, `caption`, `thumbnail_url`, `post_url`, and `timestamp` handling (including string/number `createTime` and additional cover fields).
+- Added concise Worker-safe TikTok extraction diagnostics (script presence, candidate modules, and per-strategy candidate counts) to aid troubleshooting when upstream markup shifts.
+- Updated README and package metadata to document the resilient TikTok extraction behavior while preserving the existing Bubble response contract.
+
 ## 2.4.0 - 2026-03-28
 
 - Added `GET /tiktok?username=<username>&limit=<limit>` with Bubble-friendly response shape (`platform`, `username`, `count`, `profile`, `posts`) and stable post field names (`id`, `shortcode`, `caption`, `thumbnail_url`, `post_url`, `timestamp`).
