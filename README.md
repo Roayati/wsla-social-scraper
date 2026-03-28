@@ -7,6 +7,7 @@
 - `GET /health`
 - `GET /instagram?username=<username>&limit=<limit>`
 - `GET /tiktok?username=<username>&limit=<limit>`
+- `GET /tiktok-debug?username=<username>&path=<optional-json-path>`
 - `GET /image/<encoded-image-url>`
 
 ## Authentication
@@ -62,12 +63,30 @@ Rules:
 
 - Only public TikTok profiles are supported.
 - The Worker uses lightweight fetch + HTML/JSON extraction (no browser automation).
+- `GET /tiktok` response shape is unchanged and remains production-stable.
 - TikTok extraction now prioritizes the user post list from `__UNIVERSAL_DATA_FOR_REHYDRATION__` (then `SIGI_STATE`, then `__NEXT_DATA__`) and joins those ordered IDs to `ItemModule` entries.
+- TikTok post extraction now also checks known confirmed user-post list paths first (for example `__DEFAULT_SCOPE__.webapp.user-detail.user-post.itemList`) before broader recursive fallback discovery.
 - `ItemModule` records are only returned when they are referenced by the user post ID list; fallback scanning is used only when explicit post lists are unavailable.
 - Fallback scanning enforces author consistency (`author.uniqueId` / `authorInfo.uniqueId` match), requires a usable cover image, and requires a share/canonical post URL.
 - Thumbnail selection prefers `video.cover`, `video.originCover`, `video.dynamicCover`, then top-level cover/share fields and image-post cover URLs.
 - Returned posts are sorted newest-first (`createTime`) before applying `limit`, and `count` always matches the returned post array length.
 - TikTok markup/data blobs can change or be blocked, so scraping is inherently fragile.
+
+## TikTok debug endpoint (`/tiktok-debug`)
+
+Use this temporary diagnostics endpoint to inspect the raw TikTok page structure seen by the Worker without changing `/tiktok` contract fields.
+
+- Required query: `username`
+- Optional query: `path` (JSON-path-like traversal over the parsed hydration object, e.g. `__DEFAULT_SCOPE__.webapp.user-detail`)
+- Returns bounded diagnostics (status, html length, script discovery, matching paths, candidate modules, safe previews)
+- Does **not** return full HTML or massive raw script payloads by default
+
+Example:
+
+```bash
+curl -H "x-api-key: YOUR_KEY" \
+  "https://YOUR-WORKER/tiktok-debug?username=outtaline&path=__DEFAULT_SCOPE__.webapp.user-detail"
+```
 
 ## `/image` proxy behavior
 

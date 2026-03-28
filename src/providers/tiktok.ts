@@ -62,6 +62,76 @@ interface TikTokDataExtraction {
   posts: SocialPost[];
 }
 
+interface ScriptBlobSummary {
+  id: string | null;
+  type: string | null;
+  size: number;
+  topLevelKeys: string[];
+  matchingPaths: PathMatchSummary[];
+}
+
+interface PathMatchSummary {
+  path: string;
+  type: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' | 'unknown';
+  keyCount: number | null;
+  length: number | null;
+  sampleKeys: string[];
+}
+
+interface CandidateModulePreview {
+  path: string;
+  type: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' | 'unknown';
+  key_count: number | null;
+  length: number | null;
+  sample_keys: string[];
+  sample_item_shape: {
+    has_id: boolean;
+    has_desc: boolean;
+    has_createTime: boolean;
+    has_cover: boolean;
+    has_video: boolean;
+    has_author: boolean;
+    has_author_uniqueId: boolean;
+  };
+}
+
+export interface TikTokDebugReport {
+  username: string;
+  url: string;
+  http_status: number;
+  html_length: number;
+  contains_universal_data: boolean;
+  contains_sigi_state: boolean;
+  contains_ItemModule: boolean;
+  contains_user_post: boolean;
+  contains_video_keyword: boolean;
+  scripts_found: {
+    universal_data: boolean;
+    sigi_state: boolean;
+    next_data: boolean;
+    large_json_scripts: number;
+  };
+  script_blob_summaries: ScriptBlobSummary[];
+  universal_data_summary: {
+    top_level_keys: string[];
+    matching_paths: PathMatchSummary[];
+  } | null;
+  sigi_state_summary: {
+    top_level_keys: string[];
+    matching_paths: PathMatchSummary[];
+  } | null;
+  recursive_path_discovery: {
+    total_matches: number;
+    matches: PathMatchSummary[];
+  };
+  candidate_modules: CandidateModulePreview[];
+  selected_path_preview: {
+    path: string;
+    preview: unknown;
+  } | null;
+  notes: string[];
+}
+
 interface PostExtractionResult {
   posts: SocialPost[];
   postIdsCount: number;
@@ -73,6 +143,30 @@ interface PostExtractionResult {
 
 const TIKTOK_PROFILE_URL = 'https://www.tiktok.com/@';
 const RESPONSE_LOG_PREVIEW_LENGTH = 500;
+const DEBUG_STRING_LIMIT = 180;
+const DEBUG_ARRAY_PREVIEW_LIMIT = 5;
+const DEBUG_OBJECT_KEY_LIMIT = 12;
+const DEBUG_PATH_MATCH_LIMIT = 120;
+const DEBUG_MAX_DEPTH = 7;
+const DEBUG_MIN_LARGE_SCRIPT_SIZE = 1_000;
+const TIKTOK_DEBUG_KEYWORDS = [
+  'item',
+  'itemmodule',
+  'itemlist',
+  'post',
+  'posts',
+  'user-post',
+  'user-posts',
+  'video',
+  'videos',
+  'usermodule',
+  'userpage',
+  'userinfo',
+  'sharemeta',
+  'createtime',
+  'cover',
+  'author',
+];
 
 export function createEmptyTikTokProfileMeta(): TikTokProfileMeta {
   return {
@@ -197,8 +291,219 @@ function extractTikTokScripts(bodyText: string): TikTokScriptData {
   };
 }
 
+interface HtmlScriptBlob {
+  id: string | null;
+  type: string | null;
+  content: string;
+}
+
+function extractScriptBlobsFromHtml(bodyText: string): HtmlScriptBlob[] {
+  const scriptRegex = /<script([^>]*)>([\s\S]*?)<\/script>/gi;
+  const scripts: HtmlScriptBlob[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = scriptRegex.exec(bodyText)) !== null) {
+    const attrs = match[1] ?? '';
+    const content = (match[2] ?? '').trim();
+    const idMatch = /id=["']([^"']+)["']/i.exec(attrs);
+    const typeMatch = /type=["']([^"']+)["']/i.exec(attrs);
+
+    scripts.push({
+      id: idMatch?.[1] ?? null,
+      type: typeMatch?.[1] ?? null,
+      content,
+    });
+  }
+
+  return scripts;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getPathType(value: unknown): PathMatchSummary['type'] {
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+
+  if (value === null) {
+    return 'null';
+  }
+
+  switch (typeof value) {
+    case 'object':
+      return 'object';
+    case 'string':
+      return 'string';
+    case 'number':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    default:
+      return 'unknown';
+  }
+}
+
+function isInterestingPath(path: string): boolean {
+  const lowered = path.toLowerCase();
+  return TIKTOK_DEBUG_KEYWORDS.some((keyword) => lowered.includes(keyword.toLowerCase()));
+}
+
+function summarizePath(path: string, value: unknown): PathMatchSummary {
+  const type = getPathType(value);
+  const keys = isRecord(value) ? Object.keys(value) : [];
+
+  return {
+    path,
+    type,
+    keyCount: isRecord(value) ? keys.length : null,
+    length: Array.isArray(value) ? value.length : null,
+    sampleKeys: keys.slice(0, DEBUG_OBJECT_KEY_LIMIT),
+  };
+}
+
+function discoverMatchingPaths(root: unknown, limit = DEBUG_PATH_MATCH_LIMIT): PathMatchSummary[] {
+  const matches: PathMatchSummary[] = [];
+  const seen = new Set<object>();
+
+  const visit = (node: unknown, path: string, depth: number): void => {
+    if (matches.length >= limit || depth > DEBUG_MAX_DEPTH) {
+      return;
+    }
+
+    if (isInterestingPath(path) && path.length > 0) {
+      matches.push(summarizePath(path, node));
+      if (matches.length >= limit) {
+        return;
+      }
+    }
+
+    if (Array.isArray(node)) {
+      for (let i = 0; i < Math.min(node.length, DEBUG_ARRAY_PREVIEW_LIMIT); i += 1) {
+        visit(node[i], `${path}[${i}]`, depth + 1);
+      }
+      return;
+    }
+
+    if (!isRecord(node)) {
+      return;
+    }
+
+    if (seen.has(node)) {
+      return;
+    }
+    seen.add(node);
+
+    const keys = Object.keys(node).slice(0, 100);
+    for (const key of keys) {
+      const nextPath = path ? `${path}.${key}` : key;
+      visit(node[key], nextPath, depth + 1);
+      if (matches.length >= limit) {
+        return;
+      }
+    }
+  };
+
+  visit(root, '', 0);
+  return matches;
+}
+
+function safePreview(value: unknown, depth = 0): unknown {
+  if (depth > 3) {
+    return '[truncated-depth]';
+  }
+
+  if (typeof value === 'string') {
+    return value.length > DEBUG_STRING_LIMIT ? `${value.slice(0, DEBUG_STRING_LIMIT)}…` : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, DEBUG_ARRAY_PREVIEW_LIMIT).map((entry) => safePreview(entry, depth + 1));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const preview: Record<string, unknown> = {};
+  const keys = Object.keys(value).slice(0, DEBUG_OBJECT_KEY_LIMIT);
+  for (const key of keys) {
+    preview[key] = safePreview(value[key], depth + 1);
+  }
+  if (Object.keys(value).length > keys.length) {
+    preview.__truncated_keys__ = Object.keys(value).length - keys.length;
+  }
+  return preview;
+}
+
+function readPath(root: unknown, path: string): unknown {
+  if (!path.trim()) {
+    return root;
+  }
+
+  const normalized = path.replace(/\[(\d+)\]/g, '.$1');
+  const segments = normalized.split('.').filter(Boolean);
+  let cursor: unknown = root;
+
+  for (const segment of segments) {
+    if (Array.isArray(cursor)) {
+      const index = Number.parseInt(segment, 10);
+      if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
+        return undefined;
+      }
+      cursor = cursor[index];
+      continue;
+    }
+
+    if (!isRecord(cursor) || !(segment in cursor)) {
+      return undefined;
+    }
+
+    cursor = cursor[segment];
+  }
+
+  return cursor;
+}
+
+function buildCandidateModulePreview(path: string, value: unknown): CandidateModulePreview {
+  const sampleItem = (() => {
+    if (Array.isArray(value)) {
+      return value.find((item) => isRecord(item)) ?? value[0];
+    }
+    if (isRecord(value)) {
+      const firstValue = Object.values(value)[0];
+      return firstValue ?? value;
+    }
+    return value;
+  })();
+
+  const sampleItemRecord = isRecord(sampleItem) ? sampleItem : null;
+  const author = sampleItemRecord && isRecord(sampleItemRecord.author) ? sampleItemRecord.author : null;
+  const authorInfo = sampleItemRecord && isRecord(sampleItemRecord.authorInfo) ? sampleItemRecord.authorInfo : null;
+
+  return {
+    path,
+    type: getPathType(value),
+    key_count: isRecord(value) ? Object.keys(value).length : null,
+    length: Array.isArray(value) ? value.length : null,
+    sample_keys: isRecord(value) ? Object.keys(value).slice(0, DEBUG_ARRAY_PREVIEW_LIMIT) : [],
+    sample_item_shape: {
+      has_id: Boolean(sampleItemRecord && 'id' in sampleItemRecord),
+      has_desc: Boolean(sampleItemRecord && ('desc' in sampleItemRecord || 'description' in sampleItemRecord)),
+      has_createTime: Boolean(sampleItemRecord && ('createTime' in sampleItemRecord || 'createTimeMS' in sampleItemRecord)),
+      has_cover: Boolean(
+        sampleItemRecord &&
+          ('cover' in sampleItemRecord || 'originCover' in sampleItemRecord || 'dynamicCover' in sampleItemRecord)
+      ),
+      has_video: Boolean(sampleItemRecord && 'video' in sampleItemRecord),
+      has_author: Boolean(sampleItemRecord && ('author' in sampleItemRecord || 'authorInfo' in sampleItemRecord)),
+      has_author_uniqueId: Boolean(
+        (author && typeof author.uniqueId === 'string' && author.uniqueId.length > 0) ||
+          (authorInfo && typeof authorInfo.uniqueId === 'string' && authorInfo.uniqueId.length > 0)
+      ),
+    },
+  };
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -449,6 +754,22 @@ function readStringArray(value: unknown): string[] {
 }
 
 function getTikTokUserPostIds(payload: unknown): string[] {
+  const knownPathCandidates: string[] = [
+    '__DEFAULT_SCOPE__.webapp.user-detail.user-post.itemList',
+    '__DEFAULT_SCOPE__.webapp.user-detail.user-posts.itemList',
+    '__DEFAULT_SCOPE__.webapp.user-detail.userPost.itemList',
+    '__DEFAULT_SCOPE__.webapp.user-detail.userPosts.itemList',
+    'webapp.user-detail.user-post.itemList',
+    'webapp.user-detail.user-posts.itemList',
+  ];
+
+  for (const candidatePath of knownPathCandidates) {
+    const maybeIds = readStringArray(readPath(payload, candidatePath));
+    if (maybeIds.length > 0) {
+      return maybeIds;
+    }
+  }
+
   const candidates: string[][] = [];
   const seen = new Set<object>();
 
@@ -711,6 +1032,118 @@ function limitPosts(posts: SocialPost[], limit: number): SocialPost[] {
     post_url: post.post_url ?? null,
     timestamp: post.timestamp ?? null,
   }));
+}
+
+function summarizeScriptBlob(script: HtmlScriptBlob): ScriptBlobSummary {
+  const parsed = tryParseJson<unknown>(script.content);
+  const matchingPaths = parsed ? discoverMatchingPaths(parsed, 40) : [];
+
+  return {
+    id: script.id,
+    type: script.type,
+    size: script.content.length,
+    topLevelKeys: isRecord(parsed) ? Object.keys(parsed).slice(0, DEBUG_OBJECT_KEY_LIMIT) : [],
+    matchingPaths,
+  };
+}
+
+export async function getTikTokDebugReport(username: string, selectedPath: string | null): Promise<TikTokDebugReport> {
+  const upstream = await fetchTikTokProfile(username);
+  const bodyText = upstream.bodyText;
+  const scripts = extractTikTokScripts(bodyText);
+  const scriptBlobs = extractScriptBlobsFromHtml(bodyText);
+
+  const parsedLargeJsonScripts = scriptBlobs
+    .filter((script) => script.content.length >= DEBUG_MIN_LARGE_SCRIPT_SIZE)
+    .map((script) => ({ script, parsed: tryParseJson<unknown>(script.content) }))
+    .filter((entry) => entry.parsed !== null);
+
+  const largeJsonSummaries = parsedLargeJsonScripts
+    .slice(0, 6)
+    .map((entry) => summarizeScriptBlob(entry.script));
+
+  const universalMatches = scripts.universalData ? discoverMatchingPaths(scripts.universalData, 80) : [];
+  const sigiMatches = scripts.sigiState ? discoverMatchingPaths(scripts.sigiState, 80) : [];
+  const recursiveMatches = discoverMatchingPaths(
+    {
+      universal: scripts.universalData,
+      sigi: scripts.sigiState,
+      next: scripts.nextData,
+    },
+    DEBUG_PATH_MATCH_LIMIT
+  );
+
+  const candidatePaths = recursiveMatches
+    .filter((match) => /(itemmodule|itemlist|user-post|user-posts|postlist|video)/i.test(match.path))
+    .slice(0, 8);
+
+  const preferredRoot = scripts.universalData ?? scripts.sigiState ?? scripts.nextData;
+  const candidateModules = candidatePaths
+    .map((candidate) => ({ path: candidate.path, value: readPath({ universal: scripts.universalData, sigi: scripts.sigiState, next: scripts.nextData }, candidate.path) }))
+    .filter((candidate) => candidate.value !== undefined)
+    .map((candidate) => buildCandidateModulePreview(candidate.path, candidate.value));
+
+  const selectedPreview =
+    selectedPath && preferredRoot
+      ? {
+          path: selectedPath,
+          preview: safePreview(readPath(preferredRoot, selectedPath)),
+        }
+      : null;
+
+  const notes: string[] = [];
+  if (!scripts.hasUniversalData && !scripts.hasSigiState && scripts.nextData === null) {
+    notes.push('No known TikTok JSON hydration scripts were parsed from the HTML.');
+  }
+  if (candidateModules.length === 0) {
+    notes.push('No strong post/video candidate paths were discovered in parsed script payloads.');
+  }
+
+  console.log(
+    `[tiktok-debug] status=${upstream.status} html_length=${bodyText.length} universal=${String(
+      scripts.hasUniversalData
+    )} sigi=${String(scripts.hasSigiState)} next=${String(scripts.nextData !== null)} matches=${recursiveMatches.length}`
+  );
+
+  return {
+    username,
+    url: `${TIKTOK_PROFILE_URL}${encodeURIComponent(username)}`,
+    http_status: upstream.status,
+    html_length: bodyText.length,
+    contains_universal_data: bodyText.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__'),
+    contains_sigi_state: bodyText.includes('SIGI_STATE'),
+    contains_ItemModule: bodyText.includes('ItemModule'),
+    contains_user_post: /user-post|userPost|user-posts|userPosts/.test(bodyText),
+    contains_video_keyword: /"video"|videoList|videoCount|createTime/.test(bodyText),
+    scripts_found: {
+      universal_data: scripts.hasUniversalData,
+      sigi_state: scripts.hasSigiState,
+      next_data: scripts.nextData !== null,
+      large_json_scripts: parsedLargeJsonScripts.length,
+    },
+    script_blob_summaries: largeJsonSummaries,
+    universal_data_summary: scripts.universalData
+      ? {
+          top_level_keys: isRecord(scripts.universalData)
+            ? Object.keys(scripts.universalData).slice(0, DEBUG_OBJECT_KEY_LIMIT)
+            : [],
+          matching_paths: universalMatches.slice(0, 60),
+        }
+      : null,
+    sigi_state_summary: scripts.sigiState
+      ? {
+          top_level_keys: isRecord(scripts.sigiState) ? Object.keys(scripts.sigiState).slice(0, DEBUG_OBJECT_KEY_LIMIT) : [],
+          matching_paths: sigiMatches.slice(0, 60),
+        }
+      : null,
+    recursive_path_discovery: {
+      total_matches: recursiveMatches.length,
+      matches: recursiveMatches.slice(0, 80),
+    },
+    candidate_modules: candidateModules.slice(0, 6),
+    selected_path_preview: selectedPreview,
+    notes,
+  };
 }
 
 export async function getTikTokProfile(username: string, limit: number, request: Request): Promise<TikTokProfileResponse> {
