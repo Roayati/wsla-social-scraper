@@ -5,6 +5,15 @@ const LONG_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 const FALLBACK_IMAGE_URL =
   'https://s3.amazonaws.com/appforest_uf/f1637596911843x861021239461689300/default_profile_picture.png';
 const ALLOWED_INSTAGRAM_IMAGE_HOST_SUFFIXES = ['.cdninstagram.com'];
+const ALLOWED_TIKTOK_IMAGE_HOST_SUFFIXES = [
+  '.tiktokcdn.com',
+  '.tiktokcdn-us.com',
+  '.muscdn.com',
+  '.byteimg.com',
+  '.ibytedtos.com',
+  '.byteoversea.com',
+  '.akamaized.net',
+];
 const DEFAULT_TRANSFORM_QUALITY = 82;
 const MAX_TRANSFORM_DIMENSION = 2000;
 const MIN_QUALITY = 40;
@@ -25,12 +34,13 @@ interface ImageTransformOptions {
   shouldTransform: boolean;
 }
 
-function isAllowedInstagramImageHost(hostname: string): boolean {
+function isAllowedSocialImageHost(hostname: string): boolean {
   const normalizedHostname = hostname.toLowerCase();
 
   return (
     normalizedHostname === 'cdninstagram.com' ||
-    ALLOWED_INSTAGRAM_IMAGE_HOST_SUFFIXES.some((suffix) => normalizedHostname.endsWith(suffix))
+    ALLOWED_INSTAGRAM_IMAGE_HOST_SUFFIXES.some((suffix) => normalizedHostname.endsWith(suffix)) ||
+    ALLOWED_TIKTOK_IMAGE_HOST_SUFFIXES.some((suffix) => normalizedHostname.endsWith(suffix))
   );
 }
 
@@ -52,7 +62,7 @@ function decodeImageUrlFromPath(pathname: string): string {
   }
 }
 
-function parseAndValidateInstagramImageUrl(rawUrl: string): URL {
+function parseAndValidateSocialImageUrl(rawUrl: string): URL {
   let parsed: URL;
 
   try {
@@ -65,8 +75,8 @@ function parseAndValidateInstagramImageUrl(rawUrl: string): URL {
     throw new Error('Only http and https image URLs are supported.');
   }
 
-  if (!isAllowedInstagramImageHost(parsed.hostname)) {
-    throw new Error('Only Instagram CDN image hosts are allowed.');
+  if (!isAllowedSocialImageHost(parsed.hostname)) {
+    throw new Error('Only approved Instagram/TikTok image hosts are allowed.');
   }
 
   return parsed;
@@ -290,7 +300,7 @@ export function buildProxiedImageUrl(request: Request, originalUrl: string): str
   return `${requestUrl.origin}${PROXY_IMAGE_PATH_PREFIX}${encodedOriginalUrl}`;
 }
 
-export async function proxyInstagramImage(request: Request): Promise<Response> {
+export async function proxySocialImage(request: Request): Promise<Response> {
   const requestUrl = new URL(request.url);
   const transformOptions = parseImageTransformOptions(request);
   const cache = (caches as CacheStorage & { default: Cache }).default;
@@ -305,7 +315,7 @@ export async function proxyInstagramImage(request: Request): Promise<Response> {
 
   try {
     const decodedUrl = decodeImageUrlFromPath(requestUrl.pathname);
-    upstreamImageUrl = parseAndValidateInstagramImageUrl(decodedUrl);
+    upstreamImageUrl = parseAndValidateSocialImageUrl(decodedUrl);
   } catch (error) {
     const details = error instanceof Error ? error.message : 'Invalid image proxy request.';
     const status = details.includes('allowed') ? 403 : 400;
@@ -318,7 +328,7 @@ export async function proxyInstagramImage(request: Request): Promise<Response> {
   if (!upstreamResponse.ok || upstreamResponse.status >= 400) {
     return json(
       {
-        error: 'Failed to fetch Instagram image',
+        error: 'Failed to fetch proxied image',
         details: `Fallback image request returned HTTP ${upstreamResponse.status}.`,
       },
       502
@@ -331,3 +341,5 @@ export async function proxyInstagramImage(request: Request): Promise<Response> {
 
   return proxiedResponse;
 }
+
+export { proxySocialImage as proxyInstagramImage };
