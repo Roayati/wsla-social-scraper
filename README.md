@@ -62,11 +62,12 @@ Rules:
 
 - Only public TikTok profiles are supported.
 - The Worker uses lightweight fetch + HTML/JSON extraction (no browser automation).
-- TikTok extraction now tries multiple data blobs in order: `__UNIVERSAL_DATA_FOR_REHYDRATION__`, `SIGI_STATE`, then `__NEXT_DATA__`, with regex as a final fallback.
-- Video extraction supports `ItemModule` maps, `itemList` + module joins, and direct embedded video arrays.
-- Thumbnail selection prefers static covers (`cover`/`originCover`) before dynamic cover values.
+- TikTok extraction now prioritizes the user post list from `__UNIVERSAL_DATA_FOR_REHYDRATION__` (then `SIGI_STATE`, then `__NEXT_DATA__`) and joins those ordered IDs to `ItemModule` entries.
+- `ItemModule` records are only returned when they are referenced by the user post ID list; fallback scanning is used only when explicit post lists are unavailable.
+- Fallback scanning enforces author consistency (`author.uniqueId` / `authorInfo.uniqueId` match), requires a usable cover image, and requires a share/canonical post URL.
+- Thumbnail selection prefers `video.cover`, `video.originCover`, `video.dynamicCover`, then top-level cover/share fields and image-post cover URLs.
+- Returned posts are sorted newest-first (`createTime`) before applying `limit`, and `count` always matches the returned post array length.
 - TikTok markup/data blobs can change or be blocked, so scraping is inherently fragile.
-- When possible, thumbnail URLs are proxied through `/image` for Bubble display reliability.
 
 ## `/image` proxy behavior
 

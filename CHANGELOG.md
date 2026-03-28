@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.2 - 2026-03-28
+
+- Reworked TikTok post extraction to prioritize user-owned post ID lists from `__UNIVERSAL_DATA_FOR_REHYDRATION__`, then `SIGI_STATE`, then `__NEXT_DATA__`, and join those ordered IDs against `ItemModule`.
+- Added stricter TikTok post normalization and validity checks so returned posts require a valid ID, usable thumbnail source, and reliable canonical/share URL.
+- Added author consistency filtering for fallback extraction paths to reduce stale or unrelated `ItemModule` records.
+- Updated TikTok URL and cover selection logic to prefer canonical `shareUrl` and stronger cover source ordering, while preserving Bubble field names and Worker compatibility.
+- Added concise extraction diagnostics for script presence, user post ID counts, `ItemModule` counts, joined matches, and normalized post totals.
+- Updated README and package metadata to document the new TikTok extraction strategy and post-quality safeguards.
+
 ## 2.4.1 - 2026-03-28
 
 - Fixed TikTok post extraction when profile stats are present but post arrays are empty by adding layered candidate discovery across `__UNIVERSAL_DATA_FOR_REHYDRATION__`, `SIGI_STATE`, and `__NEXT_DATA__`.
