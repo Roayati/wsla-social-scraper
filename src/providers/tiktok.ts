@@ -16,19 +16,40 @@ interface TikTokUpstreamResponse {
 interface TikTokVideoNode {
   id?: string | number;
   desc?: string;
+  description?: string;
   createTime?: number | string;
   createTimeMS?: number | string;
   covers?: string[];
+  cover?: string | { urlList?: string[]; url?: string };
+  originCover?: string | { urlList?: string[]; url?: string };
+  dynamicCover?: string | { urlList?: string[]; url?: string };
+  thumbnail?: string;
+  shareCover?: string | { urlList?: string[]; url?: string };
   imagePost?: {
     images?: Array<{
       imageURL?: { urlList?: string[] };
     }>;
   };
   video?: {
-    cover?: string;
-    originCover?: string;
-    dynamicCover?: string;
+    cover?: string | { urlList?: string[]; url?: string };
+    originCover?: string | { urlList?: string[]; url?: string };
+    dynamicCover?: string | { urlList?: string[]; url?: string };
+    thumbnail?: string;
+    shareCover?: string | { urlList?: string[]; url?: string };
   };
+}
+
+interface TikTokScriptData {
+  universalData: unknown;
+  sigiState: unknown;
+  nextData: unknown;
+  hasUniversalData: boolean;
+  hasSigiState: boolean;
+}
+
+interface VideoCandidateDiscovery {
+  videos: TikTokVideoNode[];
+  candidateKeys: string[];
 }
 
 const TIKTOK_PROFILE_URL = 'https://www.tiktok.com/@';
@@ -62,6 +83,10 @@ function getBodyPreview(bodyText: string): string {
 function logUpstreamResponse(status: number, bodyText: string): void {
   console.log(`[tiktok] upstream HTTP status: ${status}`);
   console.log(`[tiktok] upstream response preview: ${getBodyPreview(bodyText)}`);
+}
+
+function logExtraction(message: string): void {
+  console.log(`[tiktok] ${message}`);
 }
 
 function isHtmlResponse(contentType: string, bodyText: string): boolean {
@@ -132,12 +157,25 @@ function extractNextDataJson(bodyText: string): unknown {
   return extractScriptJson<unknown>(bodyText, '__NEXT_DATA__');
 }
 
-function extractUniversalDataJson(bodyText: string): unknown {
+function parseUniversalData(bodyText: string): unknown {
   return extractScriptJson<unknown>(bodyText, '__UNIVERSAL_DATA_FOR_REHYDRATION__');
 }
 
-function extractSigiStateJson(bodyText: string): unknown {
+function parseSigiState(bodyText: string): unknown {
   return extractScriptJson<unknown>(bodyText, 'SIGI_STATE');
+}
+
+function extractTikTokDataScripts(bodyText: string): TikTokScriptData {
+  const universalData = parseUniversalData(bodyText);
+  const sigiState = parseSigiState(bodyText);
+
+  return {
+    universalData,
+    sigiState,
+    nextData: extractNextDataJson(bodyText),
+    hasUniversalData: universalData !== null,
+    hasSigiState: sigiState !== null,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -220,53 +258,207 @@ function extractProfileMetaFromStructuredData(payload: unknown): TikTokProfileMe
   };
 }
 
-function extractFromItemModule(itemModule: unknown): SocialPost[] {
+function readUrlFromCoverLike(value: unknown): string | null {
+  if (typeof value === 'string' && value.length > 0) {
+    return value;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (typeof value.url === 'string' && value.url.length > 0) {
+    return value.url;
+  }
+
+  const list = value.urlList;
+  if (Array.isArray(list)) {
+    for (const candidate of list) {
+      if (typeof candidate === 'string' && candidate.length > 0) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function firstStringFromUnknownArray(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  for (const item of value) {
+    if (typeof item === 'string' && item.length > 0) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function likelyVideoObject(value: unknown): value is TikTokVideoNode {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const hasId = typeof value.id === 'string' || typeof value.id === 'number';
+  const hasVideoSignals =
+    'video' in value ||
+    'desc' in value ||
+    'description' in value ||
+    'createTime' in value ||
+    'covers' in value ||
+    'cover' in value ||
+    'originCover' in value ||
+    'dynamicCover' in value ||
+    'thumbnail' in value ||
+    'shareCover' in value ||
+    'stats' in value;
+
+  return hasId && hasVideoSignals;
+}
+
+function collectFromItemModule(itemModule: unknown): TikTokVideoNode[] {
   if (!isRecord(itemModule)) {
     return [];
   }
 
-  return Object.values(itemModule)
-    .map((item) => item as TikTokVideoNode)
-    .filter((item) => item?.id)
-    .map((item) => {
-      const id = String(item.id ?? '');
-      const thumbnail =
-        item.video?.cover ??
-        item.video?.originCover ??
-        item.video?.dynamicCover ??
-        item.covers?.[0] ??
-        item.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ??
-        null;
-
-      return {
-        id: id || null,
-        shortcode: id || null,
-        caption: item.desc ?? '',
-        thumbnail_url: thumbnail,
-        post_url: id ? '' : null,
-        timestamp: normalizeTimestamp(item.createTime ?? item.createTimeMS),
-      } satisfies SocialPost;
-    });
+  return Object.values(itemModule).filter(likelyVideoObject);
 }
 
-function extractPostCandidatesFromStructuredData(payload: unknown): SocialPost[] {
-  if (!payload) {
+function collectVideosFromArray(items: unknown[]): TikTokVideoNode[] {
+  return items.filter(likelyVideoObject);
+}
+
+function collectVideosFromIdListAndModule(idList: unknown, itemModule: unknown): TikTokVideoNode[] {
+  if (!Array.isArray(idList) || !isRecord(itemModule)) {
     return [];
   }
 
-  const itemModuleContainer = findFirstObjectWithKeys(payload, ['itemModule']);
+  const videos: TikTokVideoNode[] = [];
 
-  if (itemModuleContainer && 'itemModule' in itemModuleContainer) {
-    return extractFromItemModule(itemModuleContainer.itemModule);
+  for (const id of idList) {
+    const stringId = typeof id === 'number' ? String(id) : typeof id === 'string' ? id : null;
+    if (!stringId) {
+      continue;
+    }
+
+    const candidate = itemModule[stringId];
+    if (likelyVideoObject(candidate)) {
+      videos.push(candidate);
+    }
   }
 
-  const itemModuleDirect = findFirstObjectWithKeys(payload, ['ItemModule']);
+  return videos;
+}
 
-  if (itemModuleDirect && 'ItemModule' in itemModuleDirect) {
-    return extractFromItemModule(itemModuleDirect.ItemModule);
-  }
+function findTikTokVideoCandidates(payload: unknown): VideoCandidateDiscovery {
+  const candidates: TikTokVideoNode[] = [];
+  const candidateKeys = new Set<string>();
+  const seenObjects = new Set<object>();
 
-  return [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      const arrayVideos = collectVideosFromArray(node);
+      if (arrayVideos.length > 0) {
+        candidateKeys.add('embedded-array');
+        candidates.push(...arrayVideos);
+      }
+
+      for (const item of node) {
+        visit(item);
+      }
+      return;
+    }
+
+    if (!isRecord(node)) {
+      return;
+    }
+
+    if (seenObjects.has(node)) {
+      return;
+    }
+    seenObjects.add(node);
+
+    if (likelyVideoObject(node)) {
+      candidateKeys.add('direct-video-node');
+      candidates.push(node);
+    }
+
+    const itemModule = 'ItemModule' in node ? node.ItemModule : 'itemModule' in node ? node.itemModule : null;
+    const itemModuleVideos = collectFromItemModule(itemModule);
+    if (itemModuleVideos.length > 0) {
+      candidateKeys.add('itemModule');
+      candidates.push(...itemModuleVideos);
+    }
+
+    const idList =
+      (isRecord(node.userPost) && Array.isArray(node.userPost.itemList) ? node.userPost.itemList : null) ??
+      (isRecord(node['user-post']) && Array.isArray(node['user-post'].itemList) ? node['user-post'].itemList : null) ??
+      (isRecord(node['user-posts']) && Array.isArray(node['user-posts'].itemList)
+        ? node['user-posts'].itemList
+        : null) ??
+      (Array.isArray(node.itemList) ? node.itemList : null);
+
+    if (idList) {
+      candidateKeys.add('itemList');
+      const videosById = collectVideosFromIdListAndModule(idList, itemModule);
+      if (videosById.length > 0) {
+        candidateKeys.add('itemList->itemModule');
+        candidates.push(...videosById);
+      }
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (
+        key === 'ItemModule' ||
+        key === 'itemModule' ||
+        key === 'itemList' ||
+        key === 'userPost' ||
+        key === 'user-post' ||
+        key === 'user-posts'
+      ) {
+        candidateKeys.add(key);
+      }
+      visit(value);
+    }
+  };
+
+  visit(payload);
+
+  return {
+    videos: candidates,
+    candidateKeys: Array.from(candidateKeys).sort(),
+  };
+}
+
+function normalizeTikTokVideo(video: TikTokVideoNode, username: string): SocialPost {
+  const rawId = video.id;
+  const id = typeof rawId === 'number' ? String(rawId) : typeof rawId === 'string' && rawId.length > 0 ? rawId : null;
+  const caption = video.desc ?? video.description ?? '';
+
+  const thumbnail =
+    readUrlFromCoverLike(video.video?.cover) ??
+    readUrlFromCoverLike(video.video?.originCover) ??
+    readUrlFromCoverLike(video.cover) ??
+    readUrlFromCoverLike(video.originCover) ??
+    readUrlFromCoverLike(video.thumbnail ?? video.video?.thumbnail) ??
+    readUrlFromCoverLike(video.shareCover ?? video.video?.shareCover) ??
+    readUrlFromCoverLike(video.video?.dynamicCover) ??
+    readUrlFromCoverLike(video.dynamicCover) ??
+    firstStringFromUnknownArray(video.covers) ??
+    video.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ??
+    null;
+
+  return {
+    id,
+    shortcode: id,
+    caption,
+    thumbnail_url: thumbnail,
+    post_url: id ? `https://www.tiktok.com/@${username}/video/${id}` : null,
+    timestamp: normalizeTimestamp(video.createTime ?? video.createTimeMS),
+  };
 }
 
 function dedupePosts(posts: SocialPost[]): SocialPost[] {
@@ -355,24 +547,49 @@ function withPostUrlsAndProxy(
   });
 }
 
-function extractTikTokData(bodyText: string): { profile: TikTokProfileMeta; posts: SocialPost[] } {
-  const universalData = extractUniversalDataJson(bodyText);
-  const sigiState = extractSigiStateJson(bodyText);
-  const nextData = extractNextDataJson(bodyText);
+function extractTikTokData(bodyText: string, usernameForUrls: string): { profile: TikTokProfileMeta; posts: SocialPost[] } {
+  const scripts = extractTikTokDataScripts(bodyText);
+
+  logExtraction(
+    `data scripts found universal=${String(scripts.hasUniversalData)} sigi=${String(scripts.hasSigiState)} next=${String(
+      scripts.nextData !== null
+    )}`
+  );
 
   const profile = mergeProfile(
-    extractProfileMetaFromStructuredData(universalData) ??
-      extractProfileMetaFromStructuredData(sigiState) ??
-      extractProfileMetaFromStructuredData(nextData),
+    extractProfileMetaFromStructuredData(scripts.universalData) ??
+      extractProfileMetaFromStructuredData(scripts.sigiState) ??
+      extractProfileMetaFromStructuredData(scripts.nextData),
     extractProfileMetaWithRegex(bodyText)
   );
 
-  const posts = dedupePosts([
-    ...extractPostCandidatesFromStructuredData(universalData),
-    ...extractPostCandidatesFromStructuredData(sigiState),
-    ...extractPostCandidatesFromStructuredData(nextData),
-    ...extractPostsWithRegex(bodyText),
-  ]);
+  const universalCandidates = findTikTokVideoCandidates(scripts.universalData);
+  const sigiCandidates = findTikTokVideoCandidates(scripts.sigiState);
+  const nextCandidates = findTikTokVideoCandidates(scripts.nextData);
+
+  logExtraction(
+    `candidate modules universal=[${universalCandidates.candidateKeys.join(',')}] sigi=[${sigiCandidates.candidateKeys.join(
+      ','
+    )}] next=[${nextCandidates.candidateKeys.join(',')}]`
+  );
+
+  const normalizedCandidates = [
+    ...universalCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
+    ...sigiCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
+    ...nextCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
+  ];
+
+  const regexCandidates = extractPostsWithRegex(bodyText);
+
+  logExtraction(
+    `candidate counts universal=${universalCandidates.videos.length} sigi=${sigiCandidates.videos.length} next=${nextCandidates.videos.length} regex=${regexCandidates.length}`
+  );
+
+  const posts = dedupePosts([...normalizedCandidates, ...regexCandidates]);
+
+  if ((profile.videos ?? 0) > 0 && posts.length === 0) {
+    logExtraction('profile reports videos>0 but post extraction returned 0 candidates');
+  }
 
   return {
     profile,
@@ -386,7 +603,7 @@ function hasAnyProfileValue(profile: TikTokProfileMeta): boolean {
 
 export async function getTikTokProfile(username: string, limit: number, request: Request): Promise<TikTokProfileResponse> {
   const upstream = await fetchTikTokProfile(username);
-  const extracted = extractTikTokData(upstream.bodyText);
+  const extracted = extractTikTokData(upstream.bodyText, username);
 
   if (!hasAnyProfileValue(extracted.profile) && extracted.posts.length === 0) {
     throw internalError(
@@ -403,7 +620,7 @@ export async function getTikTokProfile(username: string, limit: number, request:
 
 export async function getTikTokPosts(username: string, limit: number): Promise<SocialPost[]> {
   const upstream = await fetchTikTokProfile(username);
-  const extracted = extractTikTokData(upstream.bodyText);
+  const extracted = extractTikTokData(upstream.bodyText, username);
 
   return extracted.posts.slice(0, limit).map((post) => {
     const id = post.id ?? post.shortcode;

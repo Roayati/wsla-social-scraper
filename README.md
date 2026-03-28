@@ -62,6 +62,9 @@ Rules:
 
 - Only public TikTok profiles are supported.
 - The Worker uses lightweight fetch + HTML/JSON extraction (no browser automation).
+- TikTok extraction now tries multiple data blobs in order: `__UNIVERSAL_DATA_FOR_REHYDRATION__`, `SIGI_STATE`, then `__NEXT_DATA__`, with regex as a final fallback.
+- Video extraction supports `ItemModule` maps, `itemList` + module joins, and direct embedded video arrays.
+- Thumbnail selection prefers static covers (`cover`/`originCover`) before dynamic cover values.
 - TikTok markup/data blobs can change or be blocked, so scraping is inherently fragile.
 - When possible, thumbnail URLs are proxied through `/image` for Bubble display reliability.
 

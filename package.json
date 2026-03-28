@@ -1,8 +1,8 @@
 {
   "name": "wsla-social-scraper",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "private": true,
-  "description": "Cloudflare Worker API for normalized Instagram and TikTok feeds with Bubble-safe JSON contracts and secure thumbnail image proxying.",
+  "description": "Cloudflare Worker API for normalized Instagram and TikTok feeds with Bubble-safe JSON contracts, resilient TikTok extraction, and secure thumbnail image proxying.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
