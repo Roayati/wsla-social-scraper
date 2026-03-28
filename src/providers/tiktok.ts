@@ -1,6 +1,5 @@
 import type {
   SocialPost,
-  SocialProvider,
   TikTokProfileMeta,
   TikTokProfileResponse,
 } from '../types/social';
@@ -19,15 +18,26 @@ interface TikTokVideoNode {
   description?: string;
   createTime?: number | string;
   createTimeMS?: number | string;
+  shareUrl?: string;
   covers?: string[];
   cover?: string | { urlList?: string[]; url?: string };
   originCover?: string | { urlList?: string[]; url?: string };
   dynamicCover?: string | { urlList?: string[]; url?: string };
   thumbnail?: string;
   shareCover?: string | { urlList?: string[]; url?: string };
+  author?: {
+    uniqueId?: string;
+    nickname?: string;
+  };
+  authorInfo?: {
+    uniqueId?: string;
+    nickname?: string;
+  };
   imagePost?: {
     images?: Array<{
       imageURL?: { urlList?: string[] };
+      imageUrl?: { urlList?: string[] };
+      displayImage?: { urlList?: string[] };
     }>;
   };
   video?: {
@@ -47,15 +57,24 @@ interface TikTokScriptData {
   hasSigiState: boolean;
 }
 
-interface VideoCandidateDiscovery {
-  videos: TikTokVideoNode[];
-  candidateKeys: string[];
+interface TikTokDataExtraction {
+  profile: TikTokProfileMeta;
+  posts: SocialPost[];
+}
+
+interface PostExtractionResult {
+  posts: SocialPost[];
+  postIdsCount: number;
+  itemModuleCount: number;
+  joinedItemsCount: number;
+  normalizedCount: number;
+  source: string;
 }
 
 const TIKTOK_PROFILE_URL = 'https://www.tiktok.com/@';
 const RESPONSE_LOG_PREVIEW_LENGTH = 500;
 
-function createEmptyTikTokProfileMeta(): TikTokProfileMeta {
+export function createEmptyTikTokProfileMeta(): TikTokProfileMeta {
   return {
     followers: null,
     following: null,
@@ -165,7 +184,7 @@ function parseSigiState(bodyText: string): unknown {
   return extractScriptJson<unknown>(bodyText, 'SIGI_STATE');
 }
 
-function extractTikTokDataScripts(bodyText: string): TikTokScriptData {
+function extractTikTokScripts(bodyText: string): TikTokScriptData {
   const universalData = parseUniversalData(bodyText);
   const sigiState = parseSigiState(bodyText);
 
@@ -297,77 +316,153 @@ function firstStringFromUnknownArray(value: unknown): string | null {
   return null;
 }
 
-function likelyVideoObject(value: unknown): value is TikTokVideoNode {
-  if (!isRecord(value)) {
+function asTikTokId(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return null;
+}
+
+function normalizeUsername(value: string): string {
+  return value.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function usernamesMatch(a: string | null, b: string): boolean {
+  if (!a) {
     return false;
   }
 
-  const hasId = typeof value.id === 'string' || typeof value.id === 'number';
-  const hasVideoSignals =
-    'video' in value ||
-    'desc' in value ||
-    'description' in value ||
-    'createTime' in value ||
-    'covers' in value ||
-    'cover' in value ||
-    'originCover' in value ||
-    'dynamicCover' in value ||
-    'thumbnail' in value ||
-    'shareCover' in value ||
-    'stats' in value;
-
-  return hasId && hasVideoSignals;
+  return normalizeUsername(a) === normalizeUsername(b);
 }
 
-function collectFromItemModule(itemModule: unknown): TikTokVideoNode[] {
-  if (!isRecord(itemModule)) {
+function getAuthorUniqueId(item: unknown): string | null {
+  if (!isRecord(item)) {
+    return null;
+  }
+
+  const author = isRecord(item.author) ? item.author : null;
+  const authorInfo = isRecord(item.authorInfo) ? item.authorInfo : null;
+
+  if (typeof author?.uniqueId === 'string' && author.uniqueId.length > 0) {
+    return author.uniqueId;
+  }
+
+  if (typeof authorInfo?.uniqueId === 'string' && authorInfo.uniqueId.length > 0) {
+    return authorInfo.uniqueId;
+  }
+
+  return null;
+}
+
+function pickBestTikTokCover(item: TikTokVideoNode): string | null {
+  const imagePostCover =
+    item.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ??
+    item.imagePost?.images?.[0]?.imageUrl?.urlList?.[0] ??
+    item.imagePost?.images?.[0]?.displayImage?.urlList?.[0] ??
+    null;
+
+  return (
+    readUrlFromCoverLike(item.video?.cover) ??
+    readUrlFromCoverLike(item.video?.originCover) ??
+    readUrlFromCoverLike(item.video?.dynamicCover) ??
+    readUrlFromCoverLike(item.cover) ??
+    readUrlFromCoverLike(item.originCover) ??
+    readUrlFromCoverLike(item.dynamicCover) ??
+    firstStringFromUnknownArray(item.covers) ??
+    readUrlFromCoverLike(item.thumbnail ?? item.video?.thumbnail) ??
+    readUrlFromCoverLike(item.shareCover ?? item.video?.shareCover) ??
+    imagePostCover
+  );
+}
+
+function pickCanonicalTikTokUrl(item: TikTokVideoNode, username: string): string | null {
+  if (typeof item.shareUrl === 'string' && item.shareUrl.length > 0) {
+    return item.shareUrl;
+  }
+
+  const id = asTikTokId(item.id);
+  if (!id) {
+    return null;
+  }
+
+  return `https://www.tiktok.com/@${username}/video/${id}`;
+}
+
+function getTikTokItemModule(payload: unknown): Record<string, unknown> {
+  const seen = new Set<object>();
+
+  const visit = (node: unknown): Record<string, unknown> | null => {
+    if (!isRecord(node)) {
+      if (Array.isArray(node)) {
+        for (const entry of node) {
+          const found = visit(entry);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      return null;
+    }
+
+    if (seen.has(node)) {
+      return null;
+    }
+    seen.add(node);
+
+    const directItemModule = isRecord(node.ItemModule) ? node.ItemModule : isRecord(node.itemModule) ? node.itemModule : null;
+    if (directItemModule) {
+      return directItemModule;
+    }
+
+    for (const value of Object.values(node)) {
+      const found = visit(value);
+      if (found) {
+        return found;
+      }
+    }
+
+    return null;
+  };
+
+  return visit(payload) ?? {};
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
     return [];
   }
 
-  return Object.values(itemModule).filter(likelyVideoObject);
-}
-
-function collectVideosFromArray(items: unknown[]): TikTokVideoNode[] {
-  return items.filter(likelyVideoObject);
-}
-
-function collectVideosFromIdListAndModule(idList: unknown, itemModule: unknown): TikTokVideoNode[] {
-  if (!Array.isArray(idList) || !isRecord(itemModule)) {
-    return [];
-  }
-
-  const videos: TikTokVideoNode[] = [];
-
-  for (const id of idList) {
-    const stringId = typeof id === 'number' ? String(id) : typeof id === 'string' ? id : null;
-    if (!stringId) {
-      continue;
-    }
-
-    const candidate = itemModule[stringId];
-    if (likelyVideoObject(candidate)) {
-      videos.push(candidate);
+  const ids: string[] = [];
+  for (const entry of value) {
+    const id = asTikTokId(entry);
+    if (id) {
+      ids.push(id);
     }
   }
 
-  return videos;
+  return ids;
 }
 
-function findTikTokVideoCandidates(payload: unknown): VideoCandidateDiscovery {
-  const candidates: TikTokVideoNode[] = [];
-  const candidateKeys = new Set<string>();
-  const seenObjects = new Set<object>();
+function getTikTokUserPostIds(payload: unknown): string[] {
+  const candidates: string[][] = [];
+  const seen = new Set<object>();
+
+  const addCandidate = (value: unknown): void => {
+    const ids = readStringArray(value);
+    if (ids.length > 0) {
+      candidates.push(ids);
+    }
+  };
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
-      const arrayVideos = collectVideosFromArray(node);
-      if (arrayVideos.length > 0) {
-        candidateKeys.add('embedded-array');
-        candidates.push(...arrayVideos);
-      }
-
-      for (const item of node) {
-        visit(item);
+      for (const entry of node) {
+        visit(entry);
       }
       return;
     }
@@ -376,50 +471,32 @@ function findTikTokVideoCandidates(payload: unknown): VideoCandidateDiscovery {
       return;
     }
 
-    if (seenObjects.has(node)) {
+    if (seen.has(node)) {
       return;
     }
-    seenObjects.add(node);
+    seen.add(node);
 
-    if (likelyVideoObject(node)) {
-      candidateKeys.add('direct-video-node');
-      candidates.push(node);
+    addCandidate(node.itemList);
+    addCandidate(node.postList);
+
+    if (isRecord(node.userPost)) {
+      addCandidate(node.userPost.itemList);
+      addCandidate(node.userPost.postList);
     }
 
-    const itemModule = 'ItemModule' in node ? node.ItemModule : 'itemModule' in node ? node.itemModule : null;
-    const itemModuleVideos = collectFromItemModule(itemModule);
-    if (itemModuleVideos.length > 0) {
-      candidateKeys.add('itemModule');
-      candidates.push(...itemModuleVideos);
+    if (isRecord(node['user-post'])) {
+      addCandidate(node['user-post'].itemList);
+      addCandidate(node['user-post'].postList);
     }
 
-    const idList =
-      (isRecord(node.userPost) && Array.isArray(node.userPost.itemList) ? node.userPost.itemList : null) ??
-      (isRecord(node['user-post']) && Array.isArray(node['user-post'].itemList) ? node['user-post'].itemList : null) ??
-      (isRecord(node['user-posts']) && Array.isArray(node['user-posts'].itemList)
-        ? node['user-posts'].itemList
-        : null) ??
-      (Array.isArray(node.itemList) ? node.itemList : null);
-
-    if (idList) {
-      candidateKeys.add('itemList');
-      const videosById = collectVideosFromIdListAndModule(idList, itemModule);
-      if (videosById.length > 0) {
-        candidateKeys.add('itemList->itemModule');
-        candidates.push(...videosById);
-      }
+    if (isRecord(node['user-posts'])) {
+      addCandidate(node['user-posts'].itemList);
+      addCandidate(node['user-posts'].postList);
     }
 
     for (const [key, value] of Object.entries(node)) {
-      if (
-        key === 'ItemModule' ||
-        key === 'itemModule' ||
-        key === 'itemList' ||
-        key === 'userPost' ||
-        key === 'user-post' ||
-        key === 'user-posts'
-      ) {
-        candidateKeys.add(key);
+      if (key.toLowerCase().includes('itemlist') || key.toLowerCase().includes('postlist')) {
+        addCandidate(value);
       }
       visit(value);
     }
@@ -427,38 +504,44 @@ function findTikTokVideoCandidates(payload: unknown): VideoCandidateDiscovery {
 
   visit(payload);
 
-  return {
-    videos: candidates,
-    candidateKeys: Array.from(candidateKeys).sort(),
-  };
+  candidates.sort((a, b) => b.length - a.length);
+
+  return candidates[0] ?? [];
 }
 
-function normalizeTikTokVideo(video: TikTokVideoNode, username: string): SocialPost {
-  const rawId = video.id;
-  const id = typeof rawId === 'number' ? String(rawId) : typeof rawId === 'string' && rawId.length > 0 ? rawId : null;
-  const caption = video.desc ?? video.description ?? '';
+function normalizeTikTokVideo(item: TikTokVideoNode, username: string, request: Request): SocialPost | null {
+  const id = asTikTokId(item.id);
 
-  const thumbnail =
-    readUrlFromCoverLike(video.video?.cover) ??
-    readUrlFromCoverLike(video.video?.originCover) ??
-    readUrlFromCoverLike(video.cover) ??
-    readUrlFromCoverLike(video.originCover) ??
-    readUrlFromCoverLike(video.thumbnail ?? video.video?.thumbnail) ??
-    readUrlFromCoverLike(video.shareCover ?? video.video?.shareCover) ??
-    readUrlFromCoverLike(video.video?.dynamicCover) ??
-    readUrlFromCoverLike(video.dynamicCover) ??
-    firstStringFromUnknownArray(video.covers) ??
-    video.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ??
-    null;
+  if (!id) {
+    return null;
+  }
+
+  const cover = pickBestTikTokCover(item);
+  if (!cover) {
+    return null;
+  }
+
+  const postUrl = pickCanonicalTikTokUrl(item, username);
+  if (!postUrl) {
+    return null;
+  }
 
   return {
     id,
     shortcode: id,
-    caption,
-    thumbnail_url: thumbnail,
-    post_url: id ? `https://www.tiktok.com/@${username}/video/${id}` : null,
-    timestamp: normalizeTimestamp(video.createTime ?? video.createTimeMS),
+    caption: item.desc ?? item.description ?? '',
+    thumbnail_url: buildProxiedImageUrl(request, cover),
+    post_url: postUrl,
+    timestamp: normalizeTimestamp(item.createTime ?? item.createTimeMS),
   };
+}
+
+function isLikelyVideoItem(item: unknown): item is TikTokVideoNode {
+  if (!isRecord(item)) {
+    return false;
+  }
+
+  return asTikTokId(item.id) !== null && ('video' in item || 'createTime' in item || 'desc' in item || 'shareUrl' in item);
 }
 
 function dedupePosts(posts: SocialPost[]): SocialPost[] {
@@ -498,26 +581,6 @@ function extractProfileMetaWithRegex(bodyText: string): TikTokProfileMeta {
   };
 }
 
-function extractPostsWithRegex(bodyText: string): SocialPost[] {
-  const posts: SocialPost[] = [];
-  const itemPattern = /"id"\s*:\s*"(\d{8,})"[\s\S]{0,800}?"desc"\s*:\s*"([^"]*)"[\s\S]{0,800}?"createTime"\s*:\s*(\d+)/g;
-
-  let match: RegExpExecArray | null;
-
-  while ((match = itemPattern.exec(bodyText)) !== null) {
-    posts.push({
-      id: match[1] ?? null,
-      shortcode: match[1] ?? null,
-      caption: match[2] ?? '',
-      thumbnail_url: null,
-      post_url: null,
-      timestamp: normalizeTimestamp(match[3]),
-    });
-  }
-
-  return posts;
-}
-
 function mergeProfile(primary: TikTokProfileMeta | null, fallback: TikTokProfileMeta): TikTokProfileMeta {
   return {
     followers: primary?.followers ?? fallback.followers,
@@ -527,31 +590,79 @@ function mergeProfile(primary: TikTokProfileMeta | null, fallback: TikTokProfile
   };
 }
 
-function withPostUrlsAndProxy(
-  request: Request,
-  username: string,
-  posts: SocialPost[],
-  limit: number
-): SocialPost[] {
-  return posts.slice(0, limit).map((post) => {
-    const id = post.id ?? post.shortcode;
+function sortPostsNewestFirst(posts: SocialPost[]): SocialPost[] {
+  return [...posts].sort((a, b) => {
+    const aTs = a.timestamp ?? 0;
+    const bTs = b.timestamp ?? 0;
 
-    return {
-      ...post,
-      id,
-      shortcode: post.shortcode ?? id,
-      caption: post.caption ?? '',
-      thumbnail_url: post.thumbnail_url ? buildProxiedImageUrl(request, post.thumbnail_url) : null,
-      post_url: id ? `https://www.tiktok.com/@${username}/video/${id}` : post.post_url,
-    };
+    if (aTs !== bTs) {
+      return bTs - aTs;
+    }
+
+    return (b.id ?? '').localeCompare(a.id ?? '');
   });
 }
 
-function extractTikTokData(bodyText: string, usernameForUrls: string): { profile: TikTokProfileMeta; posts: SocialPost[] } {
-  const scripts = extractTikTokDataScripts(bodyText);
+function extractPostsFromPayload(payload: unknown, username: string, request: Request, source: string): PostExtractionResult {
+  const itemModule = getTikTokItemModule(payload);
+  const postIds = getTikTokUserPostIds(payload);
+
+  const joinedItems: TikTokVideoNode[] = [];
+  for (const id of postIds) {
+    const candidate = itemModule[id];
+    if (isLikelyVideoItem(candidate)) {
+      joinedItems.push(candidate);
+    }
+  }
+
+  const normalizedFromJoin = joinedItems
+    .map((item) => normalizeTikTokVideo(item, username, request))
+    .filter((post): post is SocialPost => post !== null);
+
+  if (normalizedFromJoin.length > 0) {
+    return {
+      posts: dedupePosts(sortPostsNewestFirst(normalizedFromJoin)),
+      postIdsCount: postIds.length,
+      itemModuleCount: Object.keys(itemModule).length,
+      joinedItemsCount: joinedItems.length,
+      normalizedCount: normalizedFromJoin.length,
+      source,
+    };
+  }
+
+  const fallbackItems = Object.values(itemModule).filter((item) => {
+    if (!isLikelyVideoItem(item)) {
+      return false;
+    }
+
+    const authorUniqueId = getAuthorUniqueId(item);
+    if (authorUniqueId && !usernamesMatch(authorUniqueId, username)) {
+      return false;
+    }
+
+    const typed = item as TikTokVideoNode;
+    return pickBestTikTokCover(typed) !== null && pickCanonicalTikTokUrl(typed, username) !== null;
+  }) as TikTokVideoNode[];
+
+  const normalizedFallback = fallbackItems
+    .map((item) => normalizeTikTokVideo(item, username, request))
+    .filter((post): post is SocialPost => post !== null);
+
+  return {
+    posts: dedupePosts(sortPostsNewestFirst(normalizedFallback)),
+    postIdsCount: postIds.length,
+    itemModuleCount: Object.keys(itemModule).length,
+    joinedItemsCount: joinedItems.length,
+    normalizedCount: normalizedFallback.length,
+    source: `${source}:fallback-itemModule`,
+  };
+}
+
+function extractTikTokData(bodyText: string, username: string, request: Request): TikTokDataExtraction {
+  const scripts = extractTikTokScripts(bodyText);
 
   logExtraction(
-    `data scripts found universal=${String(scripts.hasUniversalData)} sigi=${String(scripts.hasSigiState)} next=${String(
+    `data scripts universal=${String(scripts.hasUniversalData)} sigi=${String(scripts.hasSigiState)} next=${String(
       scripts.nextData !== null
     )}`
   );
@@ -563,37 +674,27 @@ function extractTikTokData(bodyText: string, usernameForUrls: string): { profile
     extractProfileMetaWithRegex(bodyText)
   );
 
-  const universalCandidates = findTikTokVideoCandidates(scripts.universalData);
-  const sigiCandidates = findTikTokVideoCandidates(scripts.sigiState);
-  const nextCandidates = findTikTokVideoCandidates(scripts.nextData);
-
-  logExtraction(
-    `candidate modules universal=[${universalCandidates.candidateKeys.join(',')}] sigi=[${sigiCandidates.candidateKeys.join(
-      ','
-    )}] next=[${nextCandidates.candidateKeys.join(',')}]`
-  );
-
-  const normalizedCandidates = [
-    ...universalCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
-    ...sigiCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
-    ...nextCandidates.videos.map((video) => normalizeTikTokVideo(video, usernameForUrls)),
+  const attempts = [
+    extractPostsFromPayload(scripts.universalData, username, request, 'universal'),
+    extractPostsFromPayload(scripts.sigiState, username, request, 'sigi'),
+    extractPostsFromPayload(scripts.nextData, username, request, 'next'),
   ];
 
-  const regexCandidates = extractPostsWithRegex(bodyText);
+  for (const attempt of attempts) {
+    logExtraction(
+      `${attempt.source} itemModule=${attempt.itemModuleCount} userPostIds=${attempt.postIdsCount} joined=${attempt.joinedItemsCount} normalized=${attempt.normalizedCount}`
+    );
+  }
 
-  logExtraction(
-    `candidate counts universal=${universalCandidates.videos.length} sigi=${sigiCandidates.videos.length} next=${nextCandidates.videos.length} regex=${regexCandidates.length}`
-  );
+  const winner = attempts.find((attempt) => attempt.posts.length > 0) ?? attempts[0];
 
-  const posts = dedupePosts([...normalizedCandidates, ...regexCandidates]);
-
-  if ((profile.videos ?? 0) > 0 && posts.length === 0) {
-    logExtraction('profile reports videos>0 but post extraction returned 0 candidates');
+  if ((profile.videos ?? 0) > 0 && winner.posts.length === 0) {
+    logExtraction('profile reports videos>0 but post extraction returned 0 valid posts');
   }
 
   return {
     profile,
-    posts,
+    posts: winner.posts,
   };
 }
 
@@ -601,9 +702,20 @@ function hasAnyProfileValue(profile: TikTokProfileMeta): boolean {
   return Object.values(profile).some((value) => value !== null);
 }
 
+function limitPosts(posts: SocialPost[], limit: number): SocialPost[] {
+  return posts.slice(0, limit).map((post) => ({
+    id: post.id,
+    shortcode: post.shortcode,
+    caption: post.caption ?? '',
+    thumbnail_url: post.thumbnail_url ?? null,
+    post_url: post.post_url ?? null,
+    timestamp: post.timestamp ?? null,
+  }));
+}
+
 export async function getTikTokProfile(username: string, limit: number, request: Request): Promise<TikTokProfileResponse> {
   const upstream = await fetchTikTokProfile(username);
-  const extracted = extractTikTokData(upstream.bodyText, username);
+  const extracted = extractTikTokData(upstream.bodyText, username, request);
 
   if (!hasAnyProfileValue(extracted.profile) && extracted.posts.length === 0) {
     throw internalError(
@@ -614,30 +726,6 @@ export async function getTikTokProfile(username: string, limit: number, request:
 
   return {
     profile: hasAnyProfileValue(extracted.profile) ? extracted.profile : createEmptyTikTokProfileMeta(),
-    posts: withPostUrlsAndProxy(request, username, extracted.posts, limit),
+    posts: limitPosts(extracted.posts, limit),
   };
 }
-
-export async function getTikTokPosts(username: string, limit: number): Promise<SocialPost[]> {
-  const upstream = await fetchTikTokProfile(username);
-  const extracted = extractTikTokData(upstream.bodyText, username);
-
-  return extracted.posts.slice(0, limit).map((post) => {
-    const id = post.id ?? post.shortcode;
-
-    return {
-      ...post,
-      id,
-      shortcode: post.shortcode ?? id,
-      caption: post.caption ?? '',
-      post_url: id ? `https://www.tiktok.com/@${username}/video/${id}` : post.post_url,
-    };
-  });
-}
-
-export const tiktokProvider: SocialProvider = {
-  platform: 'tiktok',
-  getPosts: getTikTokPosts,
-};
-
-export { createEmptyTikTokProfileMeta };
