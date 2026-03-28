@@ -1,5 +1,5 @@
 import { createEmptyProfileMeta, getInstagramProfile } from './providers/instagram';
-import { createEmptyTikTokProfileMeta, getTikTokProfile } from './providers/tiktok';
+import { createEmptyTikTokProfileMeta, getTikTokDebugReport, getTikTokProfile } from './providers/tiktok';
 import type { InstagramProfileResponse, SocialFeedResponse, TikTokProfileResponse } from './types/social';
 import { AppError, notFound, toAppError, unauthorized } from './utils/errors';
 import { buildProxiedImageUrl, proxySocialImage } from './utils/image-proxy';
@@ -92,6 +92,14 @@ async function handleTikTok(request: Request, ctx: ExecutionContext): Promise<Re
   return response;
 }
 
+async function handleTikTokDebug(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const username = normalizeUsername(url.searchParams.get('username'), 'TikTok');
+  const selectedPath = url.searchParams.get('path');
+  const debugReport = await getTikTokDebugReport(username, selectedPath);
+  return json(debugReport);
+}
+
 async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return optionsResponse();
@@ -121,6 +129,10 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
 
   if (url.pathname === '/tiktok') {
     return handleTikTok(request, ctx);
+  }
+
+  if (url.pathname === '/tiktok-debug') {
+    return handleTikTokDebug(request);
   }
 
   throw notFound('Route not found', `No handler exists for ${url.pathname}.`);

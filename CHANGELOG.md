@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.3 - 2026-03-28
+
+- Added a new authenticated `GET /tiktok-debug?username=<username>&path=<optional-json-path>` diagnostics endpoint to inspect TikTok profile HTML/script hydration data without altering the production `/tiktok` response contract.
+- Added bounded TikTok debug reporting for upstream status, HTML length, script presence flags, large JSON script summaries, recursive matching path discovery, and candidate module shape previews.
+- Added optional debug `path` inspection with safe truncation limits for strings, arrays, object keys, and depth so troubleshooting can inspect specific JSON subtrees without returning massive payloads.
+- Added concise Worker logs for TikTok debugging (`status`, `html_length`, script flags, and discovered path count) while avoiding large payload logging.
+- Updated TikTok post-id extraction to check confirmed known user-post path candidates first before broader fallback scanning.
+- Updated README and package metadata for the new TikTok debug workflow.
+
 ## 2.4.2 - 2026-03-28
 
 - Reworked TikTok post extraction to prioritize user-owned post ID lists from `__UNIVERSAL_DATA_FOR_REHYDRATION__`, then `SIGI_STATE`, then `__NEXT_DATA__`, and join those ordered IDs against `ItemModule`.
