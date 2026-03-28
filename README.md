@@ -1,391 +1,101 @@
 # wsla-social-scraper
 
-`wsla-social-scraper` is a production-oriented Cloudflare Worker API for fetching normalized social content for Wsla. The project currently supports Instagram and is structured around providers so future platforms like TikTok can be added with minimal refactoring.
+`wsla-social-scraper` is a Cloudflare Worker API that returns Bubble-friendly JSON for social profile feeds.
 
-## Supported platforms
+## Supported endpoints
 
-- **Today:** Instagram
-- **Planned next:** TikTok
-- **Future-ready:** Additional providers can follow the same shared interface and response contract
+- `GET /health`
+- `GET /instagram?username=<username>&limit=<limit>`
+- `GET /tiktok?username=<username>&limit=<limit>`
+- `GET /image/<encoded-image-url>`
 
-## Current API
+## Authentication
 
-### `GET /health`
-Returns a basic health response.
+Set `API_KEY` in Worker env to require requests with `x-api-key`.
 
-Example response:
+> `GET /image/...` is intentionally public so Bubble image elements can fetch thumbnails directly.
+
+## Query validation rules (`/instagram`, `/tiktok`)
+
+- `username` is required
+- leading `@` is removed
+- surrounding spaces are trimmed
+- empty usernames are rejected (`400`)
+- `limit` defaults to `5`
+- `limit` must be between `1` and `12`
+
+## Response contract
+
+Field names are stable for Bubble mappings.
 
 ```json
 {
-  "ok": true,
-  "service": "wsla-social-scraper"
-}
-```
-
-### `GET /instagram?username=benefit.bh&limit=5`
-Returns a stable, Bubble-friendly JSON payload of recent posts from a public Instagram profile plus profile-level metadata extracted from the profile response.
-The response contract is unchanged, but each `thumbnail_url` is now automatically rewritten to a Worker-proxied image URL (`/image/<encoded-url>`), which avoids Instagram CDN hotlink/display issues in Bubble.
-
-Example response:
-
-```json
-{
-  "platform": "instagram",
-  "username": "benefit.bh",
-  "count": 5,
+  "platform": "tiktok",
+  "username": "exampleuser",
+  "count": 2,
   "profile": {
-    "total_posts": 123,
-    "followers": 45678,
-    "following": 321
+    "followers": 12345,
+    "following": 120,
+    "likes": 987654,
+    "videos": 42
   },
   "posts": [
     {
-      "id": null,
-      "shortcode": "ABC123",
-      "caption": "Post caption",
-      "thumbnail_url": "https://YOUR_WORKER_DOMAIN/image/https%3A%2F%2Fscontent-....cdninstagram.com%2F....jpg%3F...",
-      "post_url": "https://www.instagram.com/p/ABC123/",
+      "id": "1234567890",
+      "shortcode": "1234567890",
+      "caption": "Video caption",
+      "thumbnail_url": "https://YOUR-WORKER/image/https%3A%2F%2Fp16-sign-va.tiktokcdn.com%2F...",
+      "post_url": "https://www.tiktok.com/@exampleuser/video/1234567890",
       "timestamp": 1712345678
     }
   ]
 }
 ```
 
-### `GET /image/<encoded-instagram-image-url>`
-Returns the binary image body for a URL-encoded Instagram CDN image URL.
+Rules:
+- `profile` always exists
+- `posts` always exists and is an array
+- numeric counts are numbers or `null`
+- unavailable text values use `""`, unavailable URLs/IDs use `null`
 
-Optional query params:
+## TikTok notes and limitations
 
-- `w` = width (1..2000)
-- `h` = height (1..2000)
-- `q` = quality (40..95, default `82` when transform is used)
-- `fit` = `contain | cover | scale-down | crop | pad`
-- `format` = `auto | webp | avif | jpeg | png`
+- Only public TikTok profiles are supported.
+- The Worker uses lightweight fetch + HTML/JSON extraction (no browser automation).
+- TikTok markup/data blobs can change or be blocked, so scraping is inherently fragile.
+- When possible, thumbnail URLs are proxied through `/image` for Bubble display reliability.
 
-Examples:
+## `/image` proxy behavior
 
-- `/image/<encoded>?w=300`
-- `/image/<encoded>?w=300&h=300&fit=cover`
-- `/image/<encoded>?w=600&q=80&format=webp`
-- `/image/<encoded>?w=600&format=auto`
+- Accepts encoded upstream image URLs
+- Allows only approved Instagram/TikTok CDN host patterns (not an open proxy)
+- Applies optional Cloudflare image transforms (`w`, `h`, `q`, `fit`, `format`)
+- Returns long cache headers and CORS headers
+- Falls back to a default image if upstream fetch fails
 
-Behavior:
-
-- Validates and decodes the original URL
-- Allows only `http/https` URLs from Instagram CDN hosts
-- Keeps backward compatibility when no query params are supplied (existing Bubble usage keeps working)
-- Uses Cloudflare Worker image transformation options (`fetch(..., { cf: { image: ... } })`) when available
-- If `format=auto` (or omitted), negotiates output by `Accept` header:
-  - prefers `image/avif` when supported
-  - otherwise uses `image/webp` when supported
-  - otherwise falls back to `image/jpeg`
-- Uses `image/webp`, `image/avif`, `image/jpeg`, or `image/png` content-type based on selected output format
-- Preserves aspect ratio unless both `w` and `h` are supplied
-- Ignores invalid transform values safely and clamps numeric values to safe ranges
-- Adds `access-control-allow-origin: *`
-- Adds `cache-control: public, max-age=31536000, immutable`
-- Uses `caches.default` for successful Worker-layer image caching, with cache keys that include transform settings and resolved output format
-- Falls back to a default profile image when Instagram image fetch/transformation fails (and applies the same transform settings to fallback where practical)
-- Does **not** require `x-api-key` so Bubble image elements can load directly
-
-Field names are intentionally stable and should be treated as the API contract:
-
-- `profile.total_posts`
-- `profile.followers`
-- `profile.following`
-- `id`
-- `shortcode`
-- `caption`
-- `thumbnail_url` (now Worker-proxied automatically, same field name)
-- `post_url`
-- `timestamp`
-
-Profile metadata values are always numeric or `null`, and the `profile` object is always present even when Instagram omits one or more counts.
-
-## Architecture
-
-```text
-src/
-  index.ts
-  providers/
-    instagram.ts
-    tiktok.ts
-  types/
-    social.ts
-  utils/
-    errors.ts
-    image-proxy.ts
-    json.ts
-    validation.ts
-```
-
-### Design goals
-
-- **Cloudflare Worker first:** no Node-only HTTP server runtime
-- **Fetch-based scraping:** Worker-compatible requests to public Instagram endpoints
-- **Upstream diagnostics:** logs upstream status codes plus a 500-character response preview for Instagram fetches
-- **Provider-based structure:** easy to extend with TikTok later
-- **Stable JSON contract:** suitable for Bubble.io and other low-code consumers, including profile metadata
-- **Bubble-safe thumbnails:** `thumbnail_url` keeps the same field name while serving from the Worker image proxy
-- **Operational basics included:** validation, auth, CORS, and cache support
-- **Bubble-hardened responses:** every JSON response, including cache hits and errors, is rebuilt with explicit JSON, cache, and CORS headers
-
-## Requirements
-
-- Node.js 18.18+
-- npm
-- A Cloudflare account for deployment
-
-## Local setup
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Create local environment variables:
-
-```bash
-cp .dev.vars.example .dev.vars
-```
-
-Then edit `.dev.vars` and set your API key:
-
-```dotenv
-API_KEY=replace-with-a-secret-key
-```
-
-## Environment variables
-
-### `API_KEY`
-Optional but recommended. When set, requests must include:
-
-```http
-x-api-key: <secret>
-```
-
-Behavior:
-
-- If `API_KEY` is **not set**, the Worker allows requests without authentication.
-- If `API_KEY` **is set**, missing or incorrect `x-api-key` values return `401`.
-
-## Running locally with Wrangler
-
-Start the local Worker:
-
-```bash
-npm run dev
-```
-
-Wrangler will typically expose the Worker at:
-
-```text
-http://127.0.0.1:8787
-```
-
-## Deploying to Cloudflare Workers
-
-Authenticate with Cloudflare if needed:
-
-```bash
-npx wrangler login
-```
-
-Deploy:
-
-```bash
-npm run deploy
-```
-
-The Worker configuration lives in `wrangler.jsonc`.
-
-## Example curl requests
-
-Health check:
+## Example curl
 
 ```bash
 curl "http://127.0.0.1:8787/health"
 ```
 
-Instagram request with auth:
-
 ```bash
 curl -H "x-api-key: YOUR_KEY" "http://127.0.0.1:8787/instagram?username=benefit.bh&limit=5"
 ```
 
-Example Instagram response with profile metadata:
-
-```json
-{
-  "platform": "instagram",
-  "username": "arabbankbahrain",
-  "count": 5,
-  "profile": {
-    "total_posts": 250,
-    "followers": 120000,
-    "following": 45
-  },
-  "posts": [
-    {
-      "id": "1234567890",
-      "shortcode": "ABC123",
-      "caption": "Post caption",
-      "thumbnail_url": "https://YOUR_WORKER_DOMAIN/image/https%3A%2F%2Fscontent-....cdninstagram.com%2F....jpg%3F...",
-      "post_url": "https://www.instagram.com/p/ABC123/",
-      "timestamp": 1712345678
-    }
-  ]
-}
+```bash
+curl -H "x-api-key: YOUR_KEY" "https://YOUR-WORKER/tiktok?username=exampleuser&limit=5"
 ```
 
-Instagram request showing username normalization:
+## Local development
 
 ```bash
-curl -H "x-api-key: YOUR_KEY" "http://127.0.0.1:8787/instagram?username=@benefit.bh&limit=5"
+npm install
+npm run dev
 ```
 
-## Bubble API Connector example
+## Deploy
 
-A simple Bubble.io setup can look like this:
-
-- **Method:** `GET`
-- **URL:** `https://YOUR_WORKER_DOMAIN/instagram?username=<dynamic username>&limit=5`
-- **Headers:**
-  - `x-api-key: YOUR_KEY`
-- **Use as:** Data
-- **Expected response type:** JSON
-
-Recommended Bubble patterns:
-
-- Keep `username` dynamic from your Bubble app.
-- Expect every JSON response path (`/instagram`, `/health`, `401`, `404`, and scraper errors) to include the same explicit headers: `content-type: application/json; charset=utf-8`, `cache-control: public, max-age=300`, `access-control-allow-origin: *`, `access-control-allow-methods: GET, OPTIONS`, and `access-control-allow-headers: content-type, x-api-key`.
-- Cached `/instagram` responses are reconstructed before they are returned so Bubble always receives a clean JSON content type and consistent CORS/cache headers.
-- Keep `limit` in the `1..12` range.
-- Map `profile.total_posts`, `profile.followers`, and `profile.following` as numbers in Bubble.
-- Use `thumbnail_url` directly in Bubble image elements; it now points to the Worker proxy and requires no extra Bubble workflow field mapping.
-- Store `x-api-key` in a private server-side setting whenever possible.
-- Prefer Bubble workflows or backend calls rather than exposing secrets in the browser.
-
-## Validation rules
-
-### Username normalization
-
-The Worker will:
-
-- trim surrounding spaces
-- remove a leading `@`
-- reject empty usernames
-- reject obviously invalid Instagram usernames
-
-### Limit normalization
-
-The Worker will:
-
-- default to `5`
-- enforce a minimum of `1`
-- enforce a maximum of `12`
-
-## Error format
-
-Errors always return JSON in this shape:
-
-```json
-{
-  "error": "Short human readable message",
-  "details": "Optional technical details when useful"
-}
+```bash
+npm run deploy
 ```
-
-Status codes used:
-
-- `400` invalid input
-- `401` missing or invalid API key
-- `404` unknown route
-- `500` scraper or runtime failure
-
-For Instagram scraper failures, the JSON error shape stays the same while `details` now includes richer upstream context for common anti-bot or throttling cases such as upstream `403`, upstream `429`, and unexpected HTML responses.
-
-## CORS
-
-The Worker returns the following CORS headers:
-
-- `Access-Control-Allow-Origin: *`
-- `Access-Control-Allow-Methods: GET, OPTIONS`
-- `Access-Control-Allow-Headers: content-type, x-api-key`
-
-`OPTIONS` requests are handled explicitly for browser-based integrations.
-
-## Cache behavior
-
-For `GET /instagram`:
-
-- Cloudflare `caches.default` is used
-- cached responses include both the `profile` metadata object and `posts` array
-- cache key is based on the full request URL
-- only successful responses are cached
-- `Cache-Control` is set to `public, max-age=300`
-
-This reduces repeated upstream scraping and helps protect the Worker from unnecessary load.
-
-For `GET /image/<encoded>`:
-
-- Cloudflare `caches.default` is used for successful image responses
-- cache key includes the encoded source URL plus normalized transform settings (`w`, `h`, `q`, `fit`, requested `format`) and resolved negotiated format
-- `Cache-Control` is set to `public, max-age=31536000, immutable`
-- `Vary: accept` is set for format negotiation safety
-
-## Important limitations
-
-- **Public profiles only:** private Instagram accounts are not supported.
-- **Scraping can break:** Instagram may change response formats or anti-bot behavior at any time. The Worker now logs the upstream status code and the first 500 characters of the upstream body to make these failures easier to diagnose.
-- **Caching is recommended:** repeated real-time scraping is inherently fragile.
-- **No browser automation:** this Worker intentionally avoids Puppeteer, Playwright, or similar tooling.
-- **Upstream dependency:** response quality depends on public Instagram endpoint availability.
-- **Cloudflare feature requirement:** remote-image resizing via Worker `cf.image` options requires the relevant Cloudflare image transformation capability to be enabled on your zone/account. If unavailable, the proxy falls back to raw fetches to preserve functionality.
-
-## Migration notes from the original repository
-
-This repository started from `aduptive/instagram-scraper`, which was designed as a Node-friendly TypeScript scraping library. To make it practical for Cloudflare Workers, the production path was changed in these ways:
-
-- replaced Axios-based runtime requests with Worker-native `fetch`
-- removed filesystem-dependent JSON export behavior from the main product path
-- replaced library-style entrypoints with a Worker `fetch(request, env, ctx)` handler
-- reduced the Instagram mapping to a stable API contract designed for downstream consumers
-- introduced provider interfaces and shared social types for future expansion
-
-## Development notes
-
-If you add a new platform later:
-
-1. create a new provider in `src/providers/`
-2. return the shared `SocialPost` shape
-3. add a route in `src/index.ts`
-4. keep response field names stable for Bubble and other API consumers
-
-## License
-
-MIT.
-
-## Response header behavior
-
-All JSON responses are now emitted through one shared helper so Bubble server-side requests see the same header set for:
-
-- successful `/instagram` responses
-- cached `/instagram` responses
-- `/health` responses
-- `401` authentication failures
-- `404` route misses
-- scraper and validation errors
-
-The Worker guarantees these response headers on every JSON response:
-
-```http
-content-type: application/json; charset=utf-8
-cache-control: public, max-age=300
-access-control-allow-origin: *
-access-control-allow-methods: GET, OPTIONS
-access-control-allow-headers: content-type, x-api-key
-```
-
-`OPTIONS` responses continue to return `204 No Content`, but they also include the same CORS headers plus `cache-control: public, max-age=300`.

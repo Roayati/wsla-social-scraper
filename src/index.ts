@@ -1,7 +1,8 @@
 import { createEmptyProfileMeta, getInstagramProfile } from './providers/instagram';
-import type { InstagramProfileResponse, SocialFeedResponse } from './types/social';
+import { createEmptyTikTokProfileMeta, getTikTokProfile } from './providers/tiktok';
+import type { InstagramProfileResponse, SocialFeedResponse, TikTokProfileResponse } from './types/social';
 import { AppError, notFound, toAppError, unauthorized } from './utils/errors';
-import { buildProxiedImageUrl, proxyInstagramImage } from './utils/image-proxy';
+import { buildProxiedImageUrl, proxySocialImage } from './utils/image-proxy';
 import { errorResponse, json, optionsResponse, withCacheHeaders } from './utils/json';
 import { normalizeLimit, normalizeUsername } from './utils/validation';
 
@@ -34,6 +35,16 @@ function buildInstagramResponse(
   };
 }
 
+function buildTikTokResponse(username: string, result: TikTokProfileResponse): SocialFeedResponse {
+  return {
+    platform: 'tiktok',
+    username,
+    count: result.posts.length,
+    profile: result.profile ?? createEmptyTikTokProfileMeta(),
+    posts: result.posts,
+  };
+}
+
 async function handleHealth(): Promise<Response> {
   return json({
     ok: true,
@@ -51,10 +62,30 @@ async function handleInstagram(request: Request, ctx: ExecutionContext): Promise
   }
 
   const url = new URL(request.url);
-  const username = normalizeUsername(url.searchParams.get('username'));
+  const username = normalizeUsername(url.searchParams.get('username'), 'Instagram');
   const limit = normalizeLimit(url.searchParams.get('limit'));
   const result = await getInstagramProfile(username, limit);
   const response = withCacheHeaders(json(buildInstagramResponse(request, username, result)));
+
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+
+  return response;
+}
+
+async function handleTikTok(request: Request, ctx: ExecutionContext): Promise<Response> {
+  const cache = (caches as CacheStorage & { default: Cache }).default;
+  const cacheKey = new Request(request.url, { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+
+  if (cached) {
+    return withCacheHeaders(cached);
+  }
+
+  const url = new URL(request.url);
+  const username = normalizeUsername(url.searchParams.get('username'), 'TikTok');
+  const limit = normalizeLimit(url.searchParams.get('limit'));
+  const result = await getTikTokProfile(username, limit, request);
+  const response = withCacheHeaders(json(buildTikTokResponse(username, result)));
 
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
 
@@ -73,7 +104,7 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
   }
 
   if (url.pathname === '/image' || url.pathname.startsWith('/image/')) {
-    return proxyInstagramImage(request);
+    return proxySocialImage(request);
   }
 
   if (!isAuthorized(request, env)) {
@@ -86,6 +117,10 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
 
   if (url.pathname === '/instagram') {
     return handleInstagram(request, ctx);
+  }
+
+  if (url.pathname === '/tiktok') {
+    return handleTikTok(request, ctx);
   }
 
   throw notFound('Route not found', `No handler exists for ${url.pathname}.`);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.0 - 2026-03-28
+
+- Added `GET /tiktok?username=<username>&limit=<limit>` with Bubble-friendly response shape (`platform`, `username`, `count`, `profile`, `posts`) and stable post field names (`id`, `shortcode`, `caption`, `thumbnail_url`, `post_url`, `timestamp`).
+- Implemented a Cloudflare Worker-compatible TikTok provider (`src/providers/tiktok.ts`) using lightweight fetch-based parsing with layered extraction strategies: embedded structured JSON scripts, alternate blobs, then regex fallbacks.
+- Added TikTok profile meta extraction (`followers`, `following`, `likes`, `videos`) with graceful partial responses when only profile or posts are available.
+- Added TikTok route handling in `src/index.ts`, including the same validation, error, cache, and response style used by existing endpoints.
+- Extended `/image` host validation to allow approved TikTok CDN host suffixes while preserving Instagram support and avoiding open-proxy behavior.
+- Updated shared social types, README documentation, and package metadata for TikTok support.
+
 ## 2.3.0 - 2026-03-26
 
 - Upgraded `GET /image/<encoded>` to support optional transformation query params: `w`, `h`, `q`, `fit`, and `format`.

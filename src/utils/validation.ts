@@ -2,7 +2,7 @@ import { badRequest } from './errors';
 
 const USERNAME_PATTERN = /^(?!.*\.\.)(?!.*\.$)[a-zA-Z0-9._]{1,30}$/;
 
-export function normalizeUsername(input: string | null): string {
+export function normalizeUsername(input: string | null, platform = 'Social'): string {
   if (!input) {
     throw badRequest('Invalid username', 'The username query parameter is required.');
   }
@@ -16,7 +16,7 @@ export function normalizeUsername(input: string | null): string {
   if (!USERNAME_PATTERN.test(normalized)) {
     throw badRequest(
       'Invalid username',
-      'Instagram usernames may contain letters, numbers, periods, and underscores, up to 30 characters.'
+      `${platform} usernames may contain letters, numbers, periods, and underscores, up to 30 characters.`
     );
   }
 

@@ -15,16 +15,30 @@ export interface InstagramProfileMeta {
   following: number | null;
 }
 
+export interface TikTokProfileMeta {
+  followers: number | null;
+  following: number | null;
+  likes: number | null;
+  videos: number | null;
+}
+
+export type SocialProfileMeta = InstagramProfileMeta | TikTokProfileMeta;
+
 export interface SocialFeedResponse {
   platform: SupportedPlatform;
   username: string;
   count: number;
-  profile: InstagramProfileMeta;
+  profile: SocialProfileMeta;
   posts: SocialPost[];
 }
 
 export interface InstagramProfileResponse {
   profile: InstagramProfileMeta;
+  posts: SocialPost[];
+}
+
+export interface TikTokProfileResponse {
+  profile: TikTokProfileMeta;
   posts: SocialPost[];
 }
 
